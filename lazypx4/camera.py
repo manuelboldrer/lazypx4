@@ -38,6 +38,7 @@ from .config import (
     CAMERA_FULL_FPS,
     CAMERA_FULL_HEIGHT,
     CAMERA_FULL_WIDTH,
+    CAMERA_INPUT_FORMATS,
     CAMERA_LOW_BW_FPS,
     CAMERA_LOW_BW_HEIGHT,
     CAMERA_LOW_BW_WIDTH,
@@ -88,18 +89,18 @@ def _preset():
     return CAMERA_FULL_WIDTH, CAMERA_FULL_HEIGHT, CAMERA_FULL_FPS, False
 
 
-def _spawn(device, width, height, fps):
-    return subprocess.Popen(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-f", "v4l2", "-framerate", str(fps), "-video_size", f"{width}x{height}",
-            "-i", device,
-            "-vf", f"scale={width}:{height}",
-            "-pix_fmt", "rgb24", "-f", "rawvideo",
-            "-",
-        ],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
+def _spawn(device, width, height, fps, input_format):
+    args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "v4l2"]
+    if input_format:
+        args += ["-input_format", input_format]
+    args += [
+        "-framerate", str(fps), "-video_size", f"{width}x{height}",
+        "-i", device,
+        "-vf", f"scale={width}:{height}",
+        "-pix_fmt", "rgb24", "-f", "rawvideo",
+        "-",
+    ]
+    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def _read_exact(stream, n, deadline):
@@ -164,18 +165,19 @@ def _session_target():
         return stats.enabled, stats.device or settings.camera_device, stats.low_bandwidth
 
 
-def _run_session(device, width, height, fps, low_bandwidth):
+def _run_session(device, width, height, fps, low_bandwidth, input_format):
     """Run one ffmpeg capture session until settings change, the feed is
-    turned off, the stream errors out, or shutdown is requested."""
+    turned off, the stream errors out, or shutdown is requested. Returns
+    True if at least one frame was captured."""
     frame_size = width * height * 3
 
     try:
-        proc = _spawn(device, width, height, fps)
+        proc = _spawn(device, width, height, fps, input_format)
     except OSError as exc:
         with stats.lock:
             stats.capturing = False
             stats.error = f"couldn't run ffmpeg: {exc}"
-        return
+        return False
 
     with stats.lock:
         stats.capturing = True
@@ -231,6 +233,8 @@ def _run_session(device, width, height, fps, low_bandwidth):
         with stats.lock:
             stats.capturing = False
 
+    return got_frame
+
 
 def camera_thread():
     with stats.lock:
@@ -241,6 +245,12 @@ def camera_thread():
     if not stats.available:
         return
 
+    # Remembers, per device, which -input_format actually produced frames
+    # last time - so once a working one is found we stop re-probing MJPEG
+    # on every restart, but a device that stops working (unplugged/swapped)
+    # still gets re-probed from the top.
+    format_index = {}
+
     while not shutdown_event.is_set():
         enabled, device, _ = _session_target()
 
@@ -249,7 +259,11 @@ def camera_thread():
             continue
 
         width, height, fps, low_bandwidth = _preset()
-        _run_session(device, width, height, fps, low_bandwidth)
+        idx = format_index.get(device, 0) % len(CAMERA_INPUT_FORMATS)
+        input_format = CAMERA_INPUT_FORMATS[idx]
+
+        got_frame = _run_session(device, width, height, fps, low_bandwidth, input_format)
+        format_index[device] = idx if got_frame else idx + 1
 
         if shutdown_event.is_set():
             break

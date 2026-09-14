@@ -285,6 +285,15 @@ CAMERA_START_TIMEOUT = 5.0
 CAMERA_FRAME_TIMEOUT = 3.0
 CAMERA_RETRY_INTERVAL = 1.0
 
+# ffmpeg -input_format candidates to try, in order, until one actually
+# produces frames. Without pinning this, ffmpeg/V4L2 may negotiate a raw
+# (uncompressed) capture mode that many USB webcams only support at a
+# handful of fps due to USB bandwidth, even though the same device can
+# stream full-rate in a compressed format - MJPEG is the near-universal one,
+# so it's tried first. `None` means "let ffmpeg auto-select" and is the
+# last-resort fallback for devices MJPEG doesn't work on.
+CAMERA_INPUT_FORMATS = ("mjpeg", None)
+
 CAMERA_FULL_WIDTH = 256
 CAMERA_FULL_HEIGHT = 144
 CAMERA_FULL_FPS = 30
