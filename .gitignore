@@ -1,0 +1,27 @@
+.venv
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# lazypx4 runtime output
+px4_logs/
+px4_maps/
+
+# PyInstaller
+*.spec
