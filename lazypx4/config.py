@@ -298,6 +298,15 @@ CAMERA_FULL_WIDTH = 256
 CAMERA_FULL_HEIGHT = 144
 CAMERA_FULL_FPS = 30
 
+# [j]/[k] on the camera screen scale the "full" preset's resolution up/down
+# at runtime (aspect ratio held fixed at CAMERA_FULL_HEIGHT/CAMERA_FULL_WIDTH),
+# clamped to this range. Low-bandwidth resolution is intentionally not
+# adjustable - its whole point is a fixed, small, predictable frame size for
+# a slow link.
+CAMERA_FULL_WIDTH_MIN = 64
+CAMERA_FULL_WIDTH_MAX = 640
+CAMERA_FULL_RES_STEP = 1.25
+
 CAMERA_LOW_BW_WIDTH = 64
 CAMERA_LOW_BW_HEIGHT = 36
 CAMERA_LOW_BW_FPS = 5

@@ -37,7 +37,10 @@ from .config import (
     CAMERA_FRAME_TIMEOUT,
     CAMERA_FULL_FPS,
     CAMERA_FULL_HEIGHT,
+    CAMERA_FULL_RES_STEP,
     CAMERA_FULL_WIDTH,
+    CAMERA_FULL_WIDTH_MAX,
+    CAMERA_FULL_WIDTH_MIN,
     CAMERA_INPUT_FORMATS,
     CAMERA_LOW_BW_FPS,
     CAMERA_LOW_BW_HEIGHT,
@@ -48,6 +51,9 @@ from .config import (
 )
 from .eventlog import log_warn
 from .state import shutdown_event
+from .util import clamp
+
+_FULL_ASPECT = CAMERA_FULL_HEIGHT / CAMERA_FULL_WIDTH
 
 _IDLE_POLL = 0.2
 
@@ -63,6 +69,9 @@ class CameraStats:
 
     device: str = ""
     error: str = ""
+
+    full_width: int = CAMERA_FULL_WIDTH    # runtime-adjustable via [j]/[k]
+    full_height: int = CAMERA_FULL_HEIGHT
 
     frame_width: int = 0
     frame_height: int = 0
@@ -84,9 +93,22 @@ def camera_available():
 def _preset():
     with stats.lock:
         low_bw = stats.low_bandwidth
+        full_width = stats.full_width
+        full_height = stats.full_height
     if low_bw:
         return CAMERA_LOW_BW_WIDTH, CAMERA_LOW_BW_HEIGHT, CAMERA_LOW_BW_FPS, True
-    return CAMERA_FULL_WIDTH, CAMERA_FULL_HEIGHT, CAMERA_FULL_FPS, False
+    return full_width, full_height, CAMERA_FULL_FPS, False
+
+
+def adjust_full_resolution(bigger):
+    """[k]/[j] on the camera screen: scale the "full" preset's resolution
+    up/down, aspect ratio held fixed. Takes effect on the next capture
+    session (immediately, if the feed is already running)."""
+    factor = CAMERA_FULL_RES_STEP if bigger else (1.0 / CAMERA_FULL_RES_STEP)
+    with stats.lock:
+        new_width = int(round(clamp(stats.full_width * factor, CAMERA_FULL_WIDTH_MIN, CAMERA_FULL_WIDTH_MAX)))
+        stats.full_width = new_width
+        stats.full_height = max(2, int(round(new_width * _FULL_ASPECT)))
 
 
 def _spawn(device, width, height, fps, input_format):
@@ -189,8 +211,13 @@ def _run_session(device, width, height, fps, low_bandwidth, input_format):
 
     try:
         while not shutdown_event.is_set():
-            still_enabled, still_device, still_low_bw = _session_target()
-            if not still_enabled or still_device != device or still_low_bw != low_bandwidth:
+            still_enabled, still_device, _ = _session_target()
+            cur_width, cur_height, cur_fps, cur_low_bw = _preset()
+            if (
+                not still_enabled
+                or still_device != device
+                or (cur_width, cur_height, cur_fps, cur_low_bw) != (width, height, fps, low_bandwidth)
+            ):
                 break
 
             deadline = time.monotonic() + (

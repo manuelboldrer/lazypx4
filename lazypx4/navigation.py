@@ -689,6 +689,16 @@ def handle_camera_key(key):
         camera_mod.toggle_low_bandwidth()
         return
 
+    # "k"/"j" (vim-style) arrive here already normalized to "UP"/"DOWN" by
+    # normalize_vim_key() - so do plain arrow-key presses, which work too.
+    if key == "UP":
+        camera_mod.adjust_full_resolution(bigger=True)
+        return
+
+    if key == "DOWN":
+        camera_mod.adjust_full_resolution(bigger=False)
+        return
+
     if key == "d":
         open_camera_device_input()
         return

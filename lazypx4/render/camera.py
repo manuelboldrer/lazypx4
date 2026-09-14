@@ -15,7 +15,7 @@ import time
 
 from .. import camera as camera_mod
 from ..ansi import BOLD, DIM, GREEN, RED, RESET, YELLOW, ui_section
-from ..config import settings
+from ..config import CAMERA_LOW_BW_HEIGHT, CAMERA_LOW_BW_WIDTH, settings
 from .chrome import content_area
 
 _ASCII_RAMP = " .:-=+*#%@"
@@ -106,6 +106,8 @@ def draw_camera_screen():
         frame_count = camera_mod.stats.frame_count
         fps = camera_mod.stats.fps
         last_frame_at = camera_mod.stats.last_frame_at
+        full_width = camera_mod.stats.full_width
+        full_height = camera_mod.stats.full_height
 
     lines = []
     lines.append(ui_section("CAMERA", device))
@@ -117,8 +119,9 @@ def draw_camera_screen():
 
     mode_text = YELLOW + "LOW BANDWIDTH" + RESET if low_bandwidth else GREEN + "FULL" + RESET
     state_text = GREEN + BOLD + "ON" + RESET if enabled else DIM + "OFF" + RESET
+    res_text = f"{full_width}x{full_height}" if not low_bandwidth else f"{CAMERA_LOW_BW_WIDTH}x{CAMERA_LOW_BW_HEIGHT}"
     lines.append(
-        f"   Feed: {state_text}   Mode: {mode_text}"
+        f"   Feed: {state_text}   Mode: {mode_text}   Res: {res_text}"
         f"   Frames: {frame_count}   Rate: {fps:.1f} fps   Last frame: {_age_text(last_frame_at)}"
     )
     if error:
@@ -146,7 +149,7 @@ def draw_camera_screen():
 
     lines.append("")
     lines.append(
-        "[o] on/off   [b] low-bandwidth   [d] device   [w] back   [ESC] panels"
+        "[o] on/off   [b] low-bandwidth   [k/j] res +/-   [d] device   [w] back   [ESC] panels"
     )
 
     return lines
