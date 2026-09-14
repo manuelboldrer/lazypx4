@@ -270,23 +270,28 @@ POSITION_TRAIL_MAXLEN = 1000
 # Local camera preview ([w] screen - see lazypx4.camera)
 # ---------------------------------------------------------------------------
 #
-# Never started automatically (opening a V4L2 device and shelling out to
-# ffmpeg every frame is real CPU/USB cost) - the [w] screen asks for
-# confirmation before the first frame is captured. Two capture presets trade
-# detail for less data to move and decode each frame: "full" is plausible
-# over a local/SSH-on-LAN session, "low bandwidth" is meant for a slow link
-# (a telemetry radio or a thin cellular tether) and also switches the
-# renderer from ANSI truecolor half-blocks to a colourless ASCII ramp, which
-# is what actually cuts the bytes written to the terminal.
-CAMERA_CAPTURE_TIMEOUT = 3.0
+# Never started automatically (opening a V4L2 device and running ffmpeg is
+# real CPU/USB cost) - the [w] screen asks for confirmation before capture
+# starts. Once on, a single long-lived ffmpeg process streams raw frames
+# continuously (rather than being re-spawned per frame, which would reopen
+# the device - and pay its negotiation/settling time - every single frame
+# and cap effective fps far below what the device can actually do). Two
+# presets trade detail for less data to move and decode each frame: "full"
+# is plausible over a local/SSH-on-LAN session, "low bandwidth" is meant for
+# a slow link (a telemetry radio or a thin cellular tether) and also
+# switches the renderer from ANSI truecolor half-blocks to a colourless
+# ASCII ramp, which is what actually cuts the bytes written to the terminal.
+CAMERA_START_TIMEOUT = 5.0
+CAMERA_FRAME_TIMEOUT = 3.0
+CAMERA_RETRY_INTERVAL = 1.0
 
 CAMERA_FULL_WIDTH = 256
 CAMERA_FULL_HEIGHT = 144
-CAMERA_FULL_INTERVAL = 0.2
+CAMERA_FULL_FPS = 30
 
 CAMERA_LOW_BW_WIDTH = 64
 CAMERA_LOW_BW_HEIGHT = 36
-CAMERA_LOW_BW_INTERVAL = 1.5
+CAMERA_LOW_BW_FPS = 5
 
 
 # ---------------------------------------------------------------------------
