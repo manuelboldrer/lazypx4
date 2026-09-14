@@ -15,7 +15,7 @@ started.
  MODE: HOLD
  STATE:  DISARMED
  HOST: CPU  34%   RAM  51% 2.1/4.0G   DISK 62% 14G free   load 0.82
- SVC:  rosbag ● REC    zenoh ● up
+ SVC:  rosbag ● REC    zenoh ● up    xrce-agent ● up
  FLIGHT: [a]arm [d]disarm [T]takeoff [L]land [R]RTL [h]hold [m]mode  (goto/jog on [n] map)
 
  POSITION / VELOCITY ─────────────────────────────────────────────────────────
@@ -24,7 +24,8 @@ started.
  ...
  SCREENS ────────────────────────────────────────────────────────────────────
    [m] MODE   [s] CALIBRATE   [n] MAP (goto + jog)   [e] ESTIMATION   [c] CONTROL
-   [p] PARAMETERS   [g] EVENT LOG   [l] FLIGHT LOGS   [t] NSH   [q]/[ESC] EXIT
+   [p] PARAMETERS   [g] EVENT LOG   [l] FLIGHT LOGS   [t] NSH   [f] FIRMWARE
+   [u] USB/NET   [v] LIDAR   [?] ABOUT   [q]/[ESC] EXIT
 ```
 
 ## What it does
@@ -43,9 +44,12 @@ UDP link and gives you, from one keyboard-driven screen:
 | `e` | Estimation | EKF health, innovation test ratios, GPS, rangefinder, barometer, height reference |
 | `c` | Control | attitude / rate / position / velocity setpoints, guidance, RC sticks |
 | `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog; `i` saves a satellite snapshot |
-| `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader) |
+| `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
 | `g` | Event log | scrolling INFO / WARN / ERROR / FAILSAFE / COMMAND feed |
 | `t` | MAVLink shell | PX4 NuttShell over `SERIAL_CONTROL`, like QGC's MAVLink Console |
+| `f` | Flash firmware | pick a `.px4` file and a serial port, flash via `px_uploader.py` |
+| `u` | USB / network | companion-computer sanity check: USB device enumeration, Wi-Fi/Ethernet link and IP - independent of the MAVLink link |
+| `v` | LiDAR point cloud | summary + scatter view of a ROS 2 `sensor_msgs/PointCloud2` topic (e.g. Livox `/livox/points`), in the sensor's own frame; `1`/`2`/`3` switch top-down / front / oblique projection, `t` changes the subscribed topic |
 | `?` | About | logo, author/contact, sponsor link, version |
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
@@ -90,9 +94,19 @@ pip install .
 
 # optional: annotate the satellite snapshot with pins + a scale bar
 pip install ".[map]"
+
+# optional: the dashboard's ROS clock and the [v] LiDAR point-cloud screen
+# (needs a sourced ROS 2 install on PYTHONPATH too - see pyproject.toml)
+pip install ".[ros]"
+
+# optional: runtime deps of the standalone PX4 scripts used by [f] flash
+# firmware and the flight-logs screen's upload / EKF-health-check actions
+pip install ".[tools]"
 ```
 
-Requires Python 3.9+ and [`pymavlink`](https://pypi.org/project/pymavlink/).
+Requires Python 3.9+ and [`pymavlink`](https://pypi.org/project/pymavlink/). Every
+extra above is optional - without it, the corresponding screen/action just
+reports "not found" instead of failing to start.
 
 ## Run
 
@@ -101,14 +115,19 @@ lazypx4                        # listen on udpin:0.0.0.0:14560
 lazypx4 --port 14550           # a different MAVLink UDP port
 lazypx4 --log-dir ~/px4_logs   # where downloaded .ulg logs go
 lazypx4 --disk-path /data      # which filesystem the HOST block reports
+lazypx4 --firmware-dir ~/px4/build  # where [f] looks for .px4 files
+lazypx4 --lidar-topic /livox/points # ROS 2 topic for the [v] screen
 lazypx4 --help
 ```
 
 The dashboard's **HOST** line shows the companion computer's CPU / RAM / disk
 load (Linux, read from `/proc`), and **SVC** shows whether a rosbag recording
-(`ros2 bag record` / `rosbag2`) and Zenoh (`zenohd` / `zenoh-bridge-*`) are
-running - detected by scanning process command lines, so no ROS/Zenoh
-dependency is added.
+(`ros2 bag record` / `rosbag2`), Zenoh (`zenohd` / `zenoh-bridge-*`) and the
+uXRCE-DDS agent (`MicroXRCEAgent`, needed by PX4 v1.14+ to publish/subscribe
+uORB topics as ROS 2 topics) are running - all three detected by scanning
+process command lines, so no ROS/Zenoh/XRCE dependency is added just to show
+their status. The separate `u` **USB / network** screen does the same kind of
+host-only check for USB device enumeration and Wi-Fi/Ethernet link state.
 
 `lazypx4` needs an interactive terminal at least 60x16.
 
@@ -128,18 +147,23 @@ mavlink start -u 14560 -o 14560 -m normal -r 4000000
 
 ```
 lazypx4/
-├── config.py          constants, lookup tables, runtime Settings
-├── util.py            safe_int / safe_float / clamp / finite
-├── ansi.py            escape codes, terminal cursor, screen chrome
-├── models.py          LogEvent, PendingArm, CustomMode, FlightLogEntry, Parameter
-├── state.py           State (vehicle) + Session (UI) singletons, queues
-├── eventlog.py        the in-memory event log + STATUSTEXT classification
-├── search.py          the "/" incremental search shared by the list screens
-├── sysmon.py          host CPU / RAM / disk + rosbag / zenoh checks (dashboard HOST block)
-├── terminal.py        raw-mode setup + the keyboard reader thread
-├── navigation.py      key -> action controller, screen switching, confirmations
-├── satellite.py       satellite-image snapshot (background thread)
-├── app.py             connect, start threads, run the render/poll loop
+├── config.py       constants, lookup tables, runtime Settings
+├── util.py         safe_int / safe_float / clamp / finite
+├── ansi.py         escape codes, terminal cursor, screen chrome
+├── models.py       LogEvent, PendingArm, CustomMode, FlightLogEntry, Parameter
+├── state.py        State (vehicle) + Session (UI) singletons, queues
+├── eventlog.py     the in-memory event log + STATUSTEXT classification
+├── search.py       the "/" incremental search shared by the list screens
+├── sysmon.py       host CPU / RAM / disk + rosbag / zenoh / xrce-agent checks
+├── netmon.py       host USB devices + Wi-Fi/Ethernet/IP checks (the [u] screen)
+├── rosclock.py     optional rclpy node mirroring ROS 2 "now" for the dashboard
+├── lidar.py        optional rclpy node summarizing a PointCloud2 topic ([v] screen)
+├── jobs.py         generic background-subprocess runner (flash / upload / EKF check)
+├── pxtools.py      wraps the standalone PX4 scripts under Tools/ as jobs
+├── terminal.py     raw-mode setup + the keyboard reader thread
+├── navigation.py   key -> action controller, screen switching, confirmations
+├── satellite.py    satellite-image snapshot (background thread)
+├── app.py          connect, start threads, run the render/poll loop
 ├── mavlink/
 │   ├── connection.py    connect, GCS heartbeat, stream setup, vehicle_ready
 │   ├── receiver.py      the background MAVLink receiver + dispatch table
@@ -152,20 +176,12 @@ lazypx4/
 │   ├── flightlog.py     ULog listing + fast queue-based downloader
 │   └── shell.py         NSH console over SERIAL_CONTROL
 └── render/
-    ├── chrome.py        frame painting + colour/label helpers
-    └── *.py             one module per screen
+    ├── chrome.py     frame painting + colour/label helpers
+    ├── jobpanel.py   shared "background job" status block (flash/upload/EKF)
+    └── *.py          one module per screen (dashboard, about, host, firmware,
+                       pointcloud, mode_select, control, estimation, calibration,
+                       eventlog_screen, flightlog, parameters, shell, ...)
 ```
-
-### Threads
-
-* **main** - render loop (10 Hz), key dispatch, periodic `check_*` housekeeping.
-* **MAVLinkThread** - `recv_match` loop; folds messages into `state` under `state.lock`.
-* **KeyboardThread** - decodes stdin bytes into key names onto a queue.
-* **SysMonThread** - samples host CPU / RAM / disk and the rosbag / zenoh checks every 2 s.
-* **FlightLog-N** / **SatelliteMap** - short-lived download workers.
-
-`state.lock` (an `RLock`) guards all vehicle state. `LOG_DATA` packets bypass
-it entirely and go straight to the download worker over a `queue.Queue`.
 
 ## Author
 
