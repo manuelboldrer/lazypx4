@@ -300,11 +300,15 @@ CAMERA_FULL_FPS = 30
 
 # [j]/[k] on the camera screen scale the "full" preset's resolution up/down
 # at runtime (aspect ratio held fixed at CAMERA_FULL_HEIGHT/CAMERA_FULL_WIDTH),
-# clamped to this range. Low-bandwidth resolution is intentionally not
+# clamped to this range. The upper end covers a typical webcam's max (most
+# top out around 1080p) - requesting more than a given device supports just
+# makes the V4L2 driver clamp to its own max, same as any other size it
+# doesn't support exactly (see the "driver changed the video from X to Y"
+# case ffmpeg logs). Low-bandwidth resolution is intentionally not
 # adjustable - its whole point is a fixed, small, predictable frame size for
 # a slow link.
 CAMERA_FULL_WIDTH_MIN = 64
-CAMERA_FULL_WIDTH_MAX = 640
+CAMERA_FULL_WIDTH_MAX = 1920
 CAMERA_FULL_RES_STEP = 1.25
 
 CAMERA_LOW_BW_WIDTH = 64
