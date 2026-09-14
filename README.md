@@ -191,6 +191,10 @@ Sponsor: https://github.com/sponsors/manuelboldrer
 
 (Also shown in-app on the `?` About screen, along with the running version.)
 
+## Acknowledgments
+
+Saxion University of Applied Sciences, Smart Mechatronics and Robotics Group.
+
 ## License
 
 MIT - see [LICENSE](LICENSE).
