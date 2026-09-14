@@ -12,6 +12,7 @@ import os
 import queue
 import time
 
+from . import camera as camera_mod
 from . import search
 from .config import (
     FLIGHT_LOG_PAGE_SIZE,
@@ -597,6 +598,102 @@ def handle_control_key(key):
     if key == "r":
         configure_streams(session.link)
         log_info("Re-requested control / setpoint streams")
+
+
+# ---------------------------------------------------------------------------
+# RC input screen (stick positions + raw channels)
+# ---------------------------------------------------------------------------
+
+
+def open_rc_screen():
+    session.screen = "rc"
+
+    if session.link is not None:
+        configure_streams(session.link)
+
+
+def handle_rc_key(key):
+    if key == "r":
+        session.screen = "dashboard"
+        return
+
+    if key == "ESC":
+        _focus_sidebar()
+        return
+
+    _scroll_main(key)
+
+
+# ---------------------------------------------------------------------------
+# Local camera preview screen
+# ---------------------------------------------------------------------------
+
+
+def open_camera_screen():
+    session.screen = "camera"
+
+
+def _enable_camera():
+    camera_mod.toggle_enabled(True)
+    log_command(f"Camera feed ON ({settings.camera_device})")
+
+
+def toggle_camera_feed():
+    if camera_mod.stats.enabled:
+        camera_mod.toggle_enabled(False)
+        log_command("Camera feed OFF")
+        return
+
+    if not camera_mod.stats.available:
+        log_warn("Camera unavailable: 'ffmpeg' not found on PATH")
+        return
+
+    request_confirmation(
+        f"Turn ON the camera feed from {settings.camera_device}? Type YES",
+        _enable_camera,
+    )
+
+
+def open_camera_device_input():
+    request_input(
+        f"Camera device (current: {settings.camera_device}):",
+        _camera_device_submit,
+    )
+
+
+def _camera_device_submit(text):
+    text = text.strip()
+    if not text:
+        return
+
+    settings.camera_device = text
+    with camera_mod.stats.lock:
+        camera_mod.stats.device = text
+    log_command(f"Camera device changed to {text}")
+
+
+def handle_camera_key(key):
+    if key == "w":
+        session.screen = "dashboard"
+        return
+
+    if key == "ESC":
+        _focus_sidebar()
+        return
+
+    if key == "o":
+        toggle_camera_feed()
+        return
+
+    if key == "b":
+        camera_mod.toggle_low_bandwidth()
+        return
+
+    if key == "d":
+        open_camera_device_input()
+        return
+
+    _scroll_main(key)
 
 
 # ---------------------------------------------------------------------------
@@ -1499,6 +1596,14 @@ def process_key(key):
         handle_control_key(key)
         return
 
+    if session.screen == "rc":
+        handle_rc_key(key)
+        return
+
+    if session.screen == "camera":
+        handle_camera_key(key)
+        return
+
     if session.screen == "map":
         handle_map_key(key)
         return
@@ -1534,6 +1639,8 @@ _SCREEN_OPENERS = {
     "t": open_shell_screen,
     "e": open_estimation_screen,
     "c": open_control_screen,
+    "r": open_rc_screen,
+    "w": open_camera_screen,
     "n": open_map_screen,
     "s": open_calibration_screen,
     "u": open_host_screen,

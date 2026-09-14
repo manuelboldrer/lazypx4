@@ -17,6 +17,7 @@ from ..panels import SCREEN_TITLES
 from ..state import session
 from .about import draw_about_screen
 from .calibration import draw_calibration_screen
+from .camera import draw_camera_screen
 from .chrome import draw_frame, draw_lines, release_frame_size, snapshot_frame_size
 from .control import draw_control_screen
 from .dashboard import draw_dashboard
@@ -29,6 +30,7 @@ from .mapview import draw_map_screen
 from .modeselect import draw_mode_select
 from .parameters import draw_parameter_screen
 from .pointcloud import draw_pointcloud_screen
+from .rc import draw_rc_screen
 from .shell import draw_shell_screen
 
 DRAW_FUNCTIONS = {
@@ -40,6 +42,8 @@ DRAW_FUNCTIONS = {
     "parameters": draw_parameter_screen,
     "estimation": draw_estimation_screen,
     "control": draw_control_screen,
+    "rc": draw_rc_screen,
+    "camera": draw_camera_screen,
     "map": draw_map_screen,
     "calibration": draw_calibration_screen,
     "shell": draw_shell_screen,

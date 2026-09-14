@@ -43,6 +43,8 @@ UDP link and gives you, from one keyboard-driven screen:
 | `p` | Parameters | browse, filter (`/`), edit, `ALL` / `CHANGED` view, reboot |
 | `e` | Estimation | EKF health, innovation test ratios, GPS, rangefinder, barometer, height reference |
 | `c` | Control | attitude / rate / position / velocity setpoints, guidance, RC sticks |
+| `r` | RC input | stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value, RSSI/LQ/failsafe |
+| `w` | Camera preview | local V4L2/USB camera feed (not vehicle telemetry); off by default - `o` turns it on (confirms first), `b` toggles a low-bandwidth ASCII-only mode for slow links, `d` changes the device |
 | `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog; `i` saves a satellite snapshot |
 | `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
 | `g` | Event log | scrolling INFO / WARN / ERROR / FAILSAFE / COMMAND feed |
@@ -102,11 +104,18 @@ pip install ".[ros]"
 # optional: runtime deps of the standalone PX4 scripts used by [f] flash
 # firmware and the flight-logs screen's upload / EKF-health-check actions
 pip install ".[tools]"
+
+# optional: the [u] host screen's on-demand internet speed test ([i])
+pip install ".[net]"
 ```
 
 Requires Python 3.9+ and [`pymavlink`](https://pypi.org/project/pymavlink/). Every
 extra above is optional - without it, the corresponding screen/action just
 reports "not found" instead of failing to start.
+
+The `[w]` camera preview screen additionally needs the `ffmpeg` binary on
+`PATH` (not a pip package - install it via your system package manager, e.g.
+`apt install ffmpeg`) to capture from the V4L2 device.
 
 ## Run
 

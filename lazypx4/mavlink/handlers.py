@@ -343,6 +343,28 @@ def _gps_acc_m(value):
     return None
 
 
+def _gps_cog(value):
+    # cog is uint16 centidegrees; UINT16_MAX means "unknown".
+    value = safe_float(value, 0.0)
+    if 0 <= value < 65535:
+        return value / 100.0
+    return None
+
+
+def _gps_heading(yaw_value, hdg_acc_value):
+    # yaw (dual-antenna GPS heading, uint16 centidegrees) is 0 when the
+    # receiver has none to report; PX4 sends 36000 for true north instead of
+    # 0 so it isn't confused with that "unavailable" marker. hdg_acc (degE5)
+    # is only ever set alongside a valid yaw, so 0 there means "unknown".
+    yaw_value = safe_float(yaw_value, 0.0)
+    if yaw_value <= 0:
+        return None, None
+
+    hdg_acc_value = safe_float(hdg_acc_value, 0.0)
+    accuracy = hdg_acc_value / 1e5 if hdg_acc_value > 0 else None
+    return yaw_value / 100.0, accuracy
+
+
 def handle_gps(msg):
     now = time.monotonic()
 
@@ -380,6 +402,21 @@ def handle_gps(msg):
         vel = safe_float(getattr(msg, "vel", 0))
         if 0 <= vel < 65535:
             state.gps_speed = vel / 100.0
+
+        cog = _gps_cog(getattr(msg, "cog", 65535))
+        if cog is not None:
+            state.gps_cog = cog
+
+        alt_ellipsoid_mm = safe_float(getattr(msg, "alt_ellipsoid", 0))
+        if alt_ellipsoid_mm:
+            state.gps_alt_ellipsoid = alt_ellipsoid_mm / 1000.0
+
+        heading, heading_acc = _gps_heading(
+            getattr(msg, "yaw", 0), getattr(msg, "hdg_acc", 0)
+        )
+        state.gps_heading = heading if heading is not None else -1.0
+        if heading_acc is not None:
+            state.gps_heading_acc = heading_acc
 
 
 def handle_gps2(msg):

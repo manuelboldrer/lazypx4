@@ -59,6 +59,11 @@ def _build_parser():
         help="ROS 2 sensor_msgs/PointCloud2 topic for the [v] point-cloud "
              f"screen (default: {settings.lidar_topic})",
     )
+    parser.add_argument(
+        "--camera-device", default=settings.camera_device, metavar="DEVICE",
+        help="V4L2 device for the [w] camera preview screen "
+             f"(default: {settings.camera_device})",
+    )
     return parser
 
 
@@ -74,6 +79,7 @@ def main(argv=None):
     settings.firmware_dir = args.firmware_dir
     settings.tools_dir = args.tools_dir
     settings.lidar_topic = args.lidar_topic
+    settings.camera_device = args.camera_device
 
     if not sys.stdin.isatty():
         print("lazypx4 needs an interactive terminal to run.", file=sys.stderr)

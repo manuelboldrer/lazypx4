@@ -66,6 +66,10 @@ class Settings:
     #: subscribes to - see :mod:`lazypx4.lidar`.
     lidar_topic: str = "/livox/points"
 
+    #: V4L2 device the [w] camera screen captures from - see
+    #: :mod:`lazypx4.camera`. Never opened until the user turns the feed on.
+    camera_device: str = "/dev/video0"
+
 
 settings = Settings()
 
@@ -113,6 +117,16 @@ POS_ACC_OK = 3.0
 # RC link signal strength / quality, percent.
 RC_SIGNAL_GOOD = 70
 RC_SIGNAL_OK = 30
+
+# RC_CHANNELS raw PWM microsecond range - the near-universal RC convention
+# (1000 = stick/lever full one way, 1500 = centre, 2000 = full the other way).
+# A channel can overtravel slightly past 1000/2000 depending on transmitter
+# endpoint calibration, hence the wider display clamp on the [r] RC screen.
+RC_PWM_MIN = 1000
+RC_PWM_CENTER = 1500
+RC_PWM_MAX = 2000
+RC_PWM_DISPLAY_MIN = 800
+RC_PWM_DISPLAY_MAX = 2200
 
 # Rangefinder signal quality, percent.
 RANGEFINDER_SIGNAL_GOOD = 70
@@ -250,6 +264,29 @@ LOG_CHUNK_RETRIES = 5
 # (typically ~0.5-2 m at a normal zoom) would otherwise justify.
 POSITION_TRAIL_MIN_SPACING_M = 0.2
 POSITION_TRAIL_MAXLEN = 1000
+
+
+# ---------------------------------------------------------------------------
+# Local camera preview ([w] screen - see lazypx4.camera)
+# ---------------------------------------------------------------------------
+#
+# Never started automatically (opening a V4L2 device and shelling out to
+# ffmpeg every frame is real CPU/USB cost) - the [w] screen asks for
+# confirmation before the first frame is captured. Two capture presets trade
+# detail for less data to move and decode each frame: "full" is plausible
+# over a local/SSH-on-LAN session, "low bandwidth" is meant for a slow link
+# (a telemetry radio or a thin cellular tether) and also switches the
+# renderer from ANSI truecolor half-blocks to a colourless ASCII ramp, which
+# is what actually cuts the bytes written to the terminal.
+CAMERA_CAPTURE_TIMEOUT = 3.0
+
+CAMERA_FULL_WIDTH = 128
+CAMERA_FULL_HEIGHT = 72
+CAMERA_FULL_INTERVAL = 0.5
+
+CAMERA_LOW_BW_WIDTH = 64
+CAMERA_LOW_BW_HEIGHT = 36
+CAMERA_LOW_BW_INTERVAL = 1.5
 
 
 # ---------------------------------------------------------------------------

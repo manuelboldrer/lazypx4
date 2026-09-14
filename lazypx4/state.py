@@ -204,6 +204,12 @@ class State:
     gps_v_acc: float = 0.0
     gps_vel_acc: float = 0.0
     gps_speed: float = 0.0
+    gps_cog: float = 0.0
+    gps_alt_ellipsoid: float = 0.0
+    # Dual-antenna GPS heading (GPS_RAW_INT.yaw/hdg_acc) - stays -1.0 ("n/a")
+    # on single-antenna receivers, which never populate this field.
+    gps_heading: float = -1.0
+    gps_heading_acc: float = 0.0
     last_gps: float = 0.0
 
     gps2_fix: int = 0

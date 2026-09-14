@@ -64,7 +64,11 @@ def draw_estimation_screen():
         gvacc = state.gps_v_acc
         gvelacc = state.gps_vel_acc
         galt = state.gps_alt
+        galt_ellipsoid = state.gps_alt_ellipsoid
         gspeed = state.gps_speed
+        gcog = state.gps_cog
+        gheading = state.gps_heading
+        gheading_acc = state.gps_heading_acc
         last_gps = state.last_gps
 
         g2fix = state.gps2_fix
@@ -211,9 +215,18 @@ def draw_estimation_screen():
         f"   HDOP: {ghdop:.2f}   VDOP: {gvdop:.2f}   RTK: {rtk_text(gfix)}"
     )
     lines.append(
-        f"   MSL alt: {galt:.1f} m   EPH: {ghacc:.2f} m   EPV: {gvacc:.2f} m"
-        f"   speed: {gspeed:.2f} m/s   vel acc: {gvelacc:.2f} m/s"
+        f"   MSL alt: {galt:.1f} m   ellipsoid alt: {galt_ellipsoid:.1f} m"
+        f"   EPH: {ghacc:.2f} m   EPV: {gvacc:.2f} m"
     )
+    lines.append(
+        f"   speed: {gspeed:.2f} m/s   vel acc: {gvelacc:.2f} m/s   course: {gcog:.1f}°"
+    )
+    if gheading >= 0:
+        lines.append(
+            f"   dual-antenna heading: {gheading:.1f}°   accuracy: {gheading_acc:.1f}°"
+        )
+    else:
+        lines.append("   dual-antenna heading: " + DIM + "n/a (single-antenna GPS)" + RESET)
 
     if last_gps2:
         f2_color, f2_name = gps_fix_display(g2fix)

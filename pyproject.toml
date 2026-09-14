@@ -46,6 +46,10 @@ ros = ["PyYAML>=6.0", "numpy>=1.21"]
 # upload-to-web and [a] EKF-health-check actions fail with the same
 # "pip install ..." hint those scripts print for themselves.
 tools = ["pyserial>=3.5", "requests>=2.31", "six>=1.16", "pyulog>=1.0", "numpy>=1.21", "matplotlib>=3.5"]
+# lazypx4.netmon shells out to the `speedtest` CLI for the [u] host screen's
+# on-demand internet speed test ([i]). Without it that test just reports
+# "'speedtest' not found".
+net = ["speedtest-cli>=2.1"]
 
 # Fill in once the repo is pushed:
 # [project.urls]
