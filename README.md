@@ -2,7 +2,7 @@
 
 A terminal UI for a PX4 vehicle over MAVLink, in the spirit of
 [lazygit](https://github.com/jesseduffield/lazygit) and
-[lazydocker](https://github.com/jesseduffield/lazydocker): one screen, a
+[lazydocker](https://github.com/jesseduffield/lazydocker), inspired by [mrs_uav_status](https://github.com/ctu-mrs/mrs_uav_status.git): one screen, a
 single keypress per view, sensible defaults, nothing to configure to get
 started.
 
