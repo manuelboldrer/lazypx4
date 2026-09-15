@@ -60,9 +60,14 @@ def _build_parser():
              f"screen (default: {settings.lidar_topic})",
     )
     parser.add_argument(
-        "--camera-device", default=settings.camera_device, metavar="DEVICE",
-        help="V4L2 device for the [w] camera preview screen "
-             f"(default: {settings.camera_device})",
+        "--camera-topic", default=settings.camera_topic_1, metavar="TOPIC",
+        help="ROS 2 sensor_msgs/Image or CompressedImage topic for the "
+             f"[w] camera screen's first slot (default: {settings.camera_topic_1})",
+    )
+    parser.add_argument(
+        "--camera-topic-2", default=settings.camera_topic_2, metavar="TOPIC",
+        help="a second ROS 2 image topic for the [w] camera screen, shown "
+             "alongside the first (default: unset)",
     )
     return parser
 
@@ -79,7 +84,8 @@ def main(argv=None):
     settings.firmware_dir = args.firmware_dir
     settings.tools_dir = args.tools_dir
     settings.lidar_topic = args.lidar_topic
-    settings.camera_device = args.camera_device
+    settings.camera_topic_1 = args.camera_topic
+    settings.camera_topic_2 = args.camera_topic_2
 
     if not sys.stdin.isatty():
         print("lazypx4 needs an interactive terminal to run.", file=sys.stderr)

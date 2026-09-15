@@ -21,6 +21,7 @@ from .config import (
     JOG_STEP_MAX_M,
     JOG_STEP_MIN_M,
     JOG_YAW_STEP_DEG,
+    LIDAR_CAM_ROTATE_STEP,
     MODE_PAGE_SIZE,
     PARAM_PAGE_SIZE,
     settings,
@@ -625,7 +626,7 @@ def handle_rc_key(key):
 
 
 # ---------------------------------------------------------------------------
-# Local camera preview screen
+# ROS camera preview screen
 # ---------------------------------------------------------------------------
 
 
@@ -633,43 +634,25 @@ def open_camera_screen():
     session.screen = "camera"
 
 
-def _enable_camera():
-    camera_mod.toggle_enabled(True)
-    log_command(f"Camera feed ON ({settings.camera_device})")
-
-
-def toggle_camera_feed():
-    if camera_mod.stats.enabled:
-        camera_mod.toggle_enabled(False)
-        log_command("Camera feed OFF")
-        return
-
-    if not camera_mod.stats.available:
-        log_warn("Camera unavailable: 'ffmpeg' not found on PATH")
-        return
-
-    request_confirmation(
-        f"Turn ON the camera feed from {settings.camera_device}? Type YES",
-        _enable_camera,
-    )
-
-
-def open_camera_device_input():
+def open_camera_topic_input(slot):
+    current = settings.camera_topic_1 if slot == 0 else settings.camera_topic_2
     request_input(
-        f"Camera device (current: {settings.camera_device}):",
-        _camera_device_submit,
+        f"Camera {slot + 1} topic (current: {current or 'unset'}, blank to clear):",
+        lambda text: _camera_topic_submit(slot, text),
     )
 
 
-def _camera_device_submit(text):
+def _camera_topic_submit(slot, text):
     text = text.strip()
-    if not text:
-        return
+    if text and not text.startswith("/"):
+        text = "/" + text
 
-    settings.camera_device = text
-    with camera_mod.stats.lock:
-        camera_mod.stats.device = text
-    log_command(f"Camera device changed to {text}")
+    if slot == 0:
+        settings.camera_topic_1 = text
+    else:
+        settings.camera_topic_2 = text
+
+    log_command(f"Camera {slot + 1} topic changed to {text or '(none)'}")
 
 
 def handle_camera_key(key):
@@ -681,26 +664,16 @@ def handle_camera_key(key):
         _focus_sidebar()
         return
 
-    if key == "o":
-        toggle_camera_feed()
+    if key == "1":
+        open_camera_topic_input(0)
+        return
+
+    if key == "2":
+        open_camera_topic_input(1)
         return
 
     if key == "b":
         camera_mod.toggle_low_bandwidth()
-        return
-
-    # "k"/"j" (vim-style) arrive here already normalized to "UP"/"DOWN" by
-    # normalize_vim_key() - so do plain arrow-key presses, which work too.
-    if key == "UP":
-        camera_mod.adjust_full_resolution(bigger=True)
-        return
-
-    if key == "DOWN":
-        camera_mod.adjust_full_resolution(bigger=False)
-        return
-
-    if key == "d":
-        open_camera_device_input()
         return
 
     _scroll_main(key)
@@ -823,6 +796,28 @@ def handle_pointcloud_key(key):
     if key == "3":
         with state.lock:
             state.lidar_view_mode = "oblique"
+        return
+
+    if key == "c":
+        with state.lock:
+            if state.lidar_view_mode == "free":
+                state.lidar_view_mode = state.lidar_prev_view_mode
+            else:
+                state.lidar_prev_view_mode = state.lidar_view_mode
+                state.lidar_view_mode = "free"
+        return
+
+    if key in ("h", "j", "k", "l"):
+        with state.lock:
+            if state.lidar_view_mode == "free":
+                if key == "h":
+                    state.lidar_cam_yaw = (state.lidar_cam_yaw - LIDAR_CAM_ROTATE_STEP) % 360.0
+                elif key == "l":
+                    state.lidar_cam_yaw = (state.lidar_cam_yaw + LIDAR_CAM_ROTATE_STEP) % 360.0
+                elif key == "k":
+                    state.lidar_cam_pitch = clamp(state.lidar_cam_pitch + LIDAR_CAM_ROTATE_STEP, -90.0, 90.0)
+                elif key == "j":
+                    state.lidar_cam_pitch = clamp(state.lidar_cam_pitch - LIDAR_CAM_ROTATE_STEP, -90.0, 90.0)
         return
 
     if key == "t":

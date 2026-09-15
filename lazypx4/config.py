@@ -66,9 +66,11 @@ class Settings:
     #: subscribes to - see :mod:`lazypx4.lidar`.
     lidar_topic: str = "/livox/points"
 
-    #: V4L2 device the [w] camera screen captures from - see
-    #: :mod:`lazypx4.camera`. Never opened until the user turns the feed on.
-    camera_device: str = "/dev/video0"
+    #: ROS 2 image topics (sensor_msgs/Image or CompressedImage) the [w]
+    #: camera screen subscribes to - up to two, shown at once. An empty
+    #: string leaves that slot unused. See :mod:`lazypx4.camera`.
+    camera_topic_1: str = "/camera/image_raw"
+    camera_topic_2: str = ""
 
 
 settings = Settings()
@@ -219,6 +221,14 @@ JOG_MIN_INTERVAL = 0.12
 
 
 # ---------------------------------------------------------------------------
+# LiDAR point-cloud free camera ([v] screen, [c] to toggle, hjkl to rotate)
+# ---------------------------------------------------------------------------
+
+# Degrees of yaw/pitch each hjkl press adds to the free camera.
+LIDAR_CAM_ROTATE_STEP = 5.0
+
+
+# ---------------------------------------------------------------------------
 # MAVLink shell (NSH console)
 # ---------------------------------------------------------------------------
 #
@@ -267,53 +277,24 @@ POSITION_TRAIL_MAXLEN = 1000
 
 
 # ---------------------------------------------------------------------------
-# Local camera preview ([w] screen - see lazypx4.camera)
+# ROS camera preview ([w] screen - see lazypx4.camera)
 # ---------------------------------------------------------------------------
 #
-# Never started automatically (opening a V4L2 device and running ffmpeg is
-# real CPU/USB cost) - the [w] screen asks for confirmation before capture
-# starts. Once on, a single long-lived ffmpeg process streams raw frames
-# continuously (rather than being re-spawned per frame, which would reopen
-# the device - and pay its negotiation/settling time - every single frame
-# and cap effective fps far below what the device can actually do). Two
-# presets trade detail for less data to move and decode each frame: "full"
-# is plausible over a local/SSH-on-LAN session, "low bandwidth" is meant for
-# a slow link (a telemetry radio or a thin cellular tether) and also
-# switches the renderer from ANSI truecolor half-blocks to a colourless
-# ASCII ramp, which is what actually cuts the bytes written to the terminal.
-CAMERA_START_TIMEOUT = 5.0
-CAMERA_FRAME_TIMEOUT = 3.0
-CAMERA_RETRY_INTERVAL = 1.0
-
-# ffmpeg -input_format candidates to try, in order, until one actually
-# produces frames. Without pinning this, ffmpeg/V4L2 may negotiate a raw
-# (uncompressed) capture mode that many USB webcams only support at a
-# handful of fps due to USB bandwidth, even though the same device can
-# stream full-rate in a compressed format - MJPEG is the near-universal one,
-# so it's tried first. `None` means "let ffmpeg auto-select" and is the
-# last-resort fallback for devices MJPEG doesn't work on.
-CAMERA_INPUT_FORMATS = ("mjpeg", None)
-
-CAMERA_FULL_WIDTH = 256
-CAMERA_FULL_HEIGHT = 144
-CAMERA_FULL_FPS = 30
-
-# [j]/[k] on the camera screen scale the "full" preset's resolution up/down
-# at runtime (aspect ratio held fixed at CAMERA_FULL_HEIGHT/CAMERA_FULL_WIDTH),
-# clamped to this range. The upper end covers a typical webcam's max (most
-# top out around 1080p) - requesting more than a given device supports just
-# makes the V4L2 driver clamp to its own max, same as any other size it
-# doesn't support exactly (see the "driver changed the video from X to Y"
-# case ffmpeg logs). Low-bandwidth resolution is intentionally not
-# adjustable - its whole point is a fixed, small, predictable frame size for
-# a slow link.
-CAMERA_FULL_WIDTH_MIN = 64
-CAMERA_FULL_WIDTH_MAX = 1920
-CAMERA_FULL_RES_STEP = 1.25
-
-CAMERA_LOW_BW_WIDTH = 64
-CAMERA_LOW_BW_HEIGHT = 36
-CAMERA_LOW_BW_FPS = 5
+# Subscribes to up to two ROS 2 image topics (sensor_msgs/Image or
+# CompressedImage - see settings.camera_topic_1/camera_topic_2), the same
+# "just subscribe, no confirmation needed" approach lazypx4.lidar uses for
+# the [v] point-cloud screen, since a topic subscription carries none of the
+# V4L2/ffmpeg approach's old "opens real hardware" cost. Frame size/rate are
+# whatever the publisher sends - lazypx4 doesn't control the source, only how
+# it's drawn.
+#
+# [b] on that screen switches the renderer between full ANSI truecolor
+# half-blocks and a colourless ASCII ramp capped to CAMERA_LOW_BW_MAX_COLS -
+# a client-side-only choice (unlike the old ffmpeg preset pair, it can't
+# reduce what the publisher sends) meant for a slow link such as a
+# telemetry radio or a thin cellular tether, where every byte the terminal
+# redraw writes matters.
+CAMERA_LOW_BW_MAX_COLS = 48
 
 
 # ---------------------------------------------------------------------------

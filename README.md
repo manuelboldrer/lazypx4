@@ -44,14 +44,14 @@ UDP link and gives you, from one keyboard-driven screen:
 | `e` | Estimation | EKF health, innovation test ratios, GPS, rangefinder, barometer, height reference |
 | `c` | Control | attitude / rate / position / velocity setpoints, guidance, RC sticks |
 | `r` | RC input | stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value, RSSI/LQ/failsafe |
-| `w` | Camera preview | local V4L2/USB camera feed (not vehicle telemetry); off by default - `o` turns it on (confirms first), `b` toggles a low-bandwidth ASCII-only mode for slow links, `d` changes the device |
+| `w` | Camera preview | up to two ROS 2 `sensor_msgs/Image`/`CompressedImage` topics shown at once - `1`/`2` set each slot's topic (blank clears it), `b` toggles a low-bandwidth ASCII-only render for slow links |
 | `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog; `i` saves a satellite snapshot |
 | `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
 | `g` | Event log | scrolling INFO / WARN / ERROR / FAILSAFE / COMMAND feed |
 | `t` | MAVLink shell | PX4 NuttShell over `SERIAL_CONTROL`, like QGC's MAVLink Console |
 | `f` | Flash firmware | pick a `.px4` file and a serial port, flash via `px_uploader.py` |
 | `u` | USB / network | companion-computer sanity check: USB device enumeration, Wi-Fi/Ethernet link and IP - independent of the MAVLink link |
-| `v` | LiDAR point cloud | summary + scatter view of a ROS 2 `sensor_msgs/PointCloud2` topic (e.g. Livox `/livox/points`), in the sensor's own frame; `1`/`2`/`3` switch top-down / front / oblique projection, `t` changes the subscribed topic |
+| `v` | LiDAR point cloud | summary + scatter view of a ROS 2 `sensor_msgs/PointCloud2` topic (e.g. Livox `/livox/points`), in the sensor's own frame; `1`/`2`/`3` switch top-down / front / oblique projection, `c` toggles a freely-rotatable camera panned/tilted with `hjkl`, `t` changes the subscribed topic |
 | `?` | About | logo, author/contact, sponsor link, version |
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
@@ -97,8 +97,9 @@ pip install .
 # optional: annotate the satellite snapshot with pins + a scale bar
 pip install ".[map]"
 
-# optional: the dashboard's ROS clock and the [v] LiDAR point-cloud screen
-# (needs a sourced ROS 2 install on PYTHONPATH too - see pyproject.toml)
+# optional: the dashboard's ROS clock, the [v] LiDAR point-cloud screen and
+# the [w] camera screen (needs a sourced ROS 2 install on PYTHONPATH too -
+# see pyproject.toml)
 pip install ".[ros]"
 
 # optional: runtime deps of the standalone PX4 scripts used by [f] flash
@@ -113,9 +114,9 @@ Requires Python 3.9+ and [`pymavlink`](https://pypi.org/project/pymavlink/). Eve
 extra above is optional - without it, the corresponding screen/action just
 reports "not found" instead of failing to start.
 
-The `[w]` camera preview screen additionally needs the `ffmpeg` binary on
-`PATH` (not a pip package - install it via your system package manager, e.g.
-`apt install ffmpeg`) to capture from the V4L2 device.
+The `[w]` camera screen's topics can publish `sensor_msgs/CompressedImage`
+instead of raw `Image`; decoding those additionally needs Pillow (the
+`[map]` extra above).
 
 ## Run
 
@@ -126,6 +127,7 @@ lazypx4 --log-dir ~/px4_logs   # where downloaded .ulg logs go
 lazypx4 --disk-path /data      # which filesystem the HOST block reports
 lazypx4 --firmware-dir ~/px4/build  # where [f] looks for .px4 files
 lazypx4 --lidar-topic /livox/points # ROS 2 topic for the [v] screen
+lazypx4 --camera-topic /camera/image_raw --camera-topic-2 /camera2/image_raw # [w] screen topics
 lazypx4 --help
 ```
 
@@ -195,15 +197,12 @@ lazypx4/
 ## Author
 
 Manuel Boldrer - manuel.boldrer@gmail.com
-
-Sponsor: https://github.com/sponsors/manuelboldrer
+Saxion University of Applied Sciences, Smart Mechatronics and Robotics Group.
 
 (Also shown in-app on the `?` About screen, along with the running version.)
 
-## Acknowledgments
-
-Saxion University of Applied Sciences, Smart Mechatronics and Robotics Group.
 
 ## License
 
 MIT - see [LICENSE](LICENSE).
+

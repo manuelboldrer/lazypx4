@@ -171,7 +171,7 @@ def run():
         )
         log_info(f"Press [f] to flash firmware from {settings.firmware_dir}")
         log_info(f"Press [v] for a LiDAR point-cloud overview ({settings.lidar_topic})")
-        log_info(f"Press [r] for RC stick positions / channels, [w] for a camera preview ({settings.camera_device})")
+        log_info(f"Press [r] for RC stick positions / channels, [w] for a camera preview ({settings.camera_topic_1 or 'no topic set'})")
 
         frame_period = 1.0 / REFRESH_HZ
         next_frame = time.monotonic()

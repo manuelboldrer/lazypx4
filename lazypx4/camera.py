@@ -1,85 +1,132 @@
-"""Local V4L2/USB camera preview for the [w] screen: runs ``ffmpeg`` as a
-long-lived subprocess streaming raw frames from ``settings.camera_device``
-(default ``/dev/video0``), independent of MAVLink and of the vehicle - a
-webcam or gimbal camera plugged into whatever machine is running lazypx4.
+"""ROS 2 camera preview for the [w] screen: subscribes to up to two
+``sensor_msgs/Image`` or ``sensor_msgs/CompressedImage`` topics - see
+``settings.camera_topic_1``/``camera_topic_2`` - and decodes each into a
+plain RGB24 buffer :mod:`lazypx4.render.camera` draws as ANSI truecolor
+half-blocks. Same shape as lazypx4.lidar's PointCloud2 handling: runs its
+own rclpy node in its own ``rclpy.Context()`` (independent of rosclock's and
+lidar's - the *implicit default* context can only be initialized once per
+process, but callers each supplying their own Context coexist fine), and
+the [w] screen's [1]/[2] keys change a topic at runtime without restarting
+this thread.
 
-Never started automatically: opening the device and running ffmpeg is real
-CPU/USB cost, so capture only begins after the [w] screen's [o] toggle is
-confirmed, same "never automatic" rule netmon.py's internet speed test
-follows. [b] on that screen switches between two presets - see CAMERA_* in
-lazypx4.config - "full" (bigger, more frequent frames, rendered as ANSI
-truecolor half-blocks) and "low bandwidth" (smaller, less frequent frames
-rendered as a colourless ASCII ramp), the latter meant for a slow link such
-as a telemetry radio or a thin cellular tether where every byte the
-terminal redraw writes matters.
-
-The ffmpeg process is kept running and read continuously rather than
-re-spawned per frame: re-opening a V4L2 device on every capture pays that
-device's negotiation/settling time (often hundreds of ms to seconds on USB
-webcams) on every single frame, which caps effective fps far below what the
-device can actually deliver. One process is started per capture session
-(and restarted on preset/device change or if it dies) and frames are read
-off its stdout as fast as the device produces them, up to the preset fps.
+Optional: if rclpy or sensor_msgs can't be imported (no ROS 2 environment
+sourced) or numpy is missing, this module's thread returns immediately and
+the camera screen just says so. A topic publishing CompressedImage
+additionally needs Pillow (`pip install lazypx4[map]`) to decode - without
+it that slot reports the topic is compressed and Pillow is missing, rather
+than silently showing nothing.
 
 Delete this module and the [w] CAMERA screen and nothing else changes.
 """
 
 from __future__ import annotations
 
-import select
-import shutil
-import subprocess
+import io
 import threading
 import time
 from dataclasses import dataclass, field
 
-from .config import (
-    CAMERA_FRAME_TIMEOUT,
-    CAMERA_FULL_FPS,
-    CAMERA_FULL_HEIGHT,
-    CAMERA_FULL_RES_STEP,
-    CAMERA_FULL_WIDTH,
-    CAMERA_FULL_WIDTH_MAX,
-    CAMERA_FULL_WIDTH_MIN,
-    CAMERA_INPUT_FORMATS,
-    CAMERA_LOW_BW_FPS,
-    CAMERA_LOW_BW_HEIGHT,
-    CAMERA_LOW_BW_WIDTH,
-    CAMERA_RETRY_INTERVAL,
-    CAMERA_START_TIMEOUT,
-    settings,
-)
+from .config import settings
 from .eventlog import log_warn
 from .state import shutdown_event
-from .util import clamp
 
-_FULL_ASPECT = CAMERA_FULL_HEIGHT / CAMERA_FULL_WIDTH
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+try:
+    from PIL import Image as PILImage
+except Exception:
+    PILImage = None
+
+try:
+    import rclpy
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import CompressedImage, Image
+except Exception:
+    rclpy = None
+    SingleThreadedExecutor = None
+    Node = None
+    qos_profile_sensor_data = None
+    Image = None
+    CompressedImage = None
+
+#: Number of simultaneously subscribed topics/slots the [w] screen shows.
+NUM_SLOTS = 2
+
+#: sensor_msgs/Image ``encoding`` -> (channel count, already-RGB byte order,
+#: or None for mono8 which is replicated to all 3 channels). Only the 8-bit
+#: encodings common ROS camera drivers actually publish - anything else
+#: reports "unsupported encoding" rather than guessing at a layout, except
+#: "mono16" (16-bit grayscale - depth/thermal cameras), decoded separately
+#: by _decode_mono16() since it needs contrast stretching, not a fixed
+#: channel layout.
+_ENCODINGS = {
+    "rgb8": (3, True),
+    "bgr8": (3, False),
+    "rgba8": (4, True),
+    "bgra8": (4, False),
+    "mono8": (1, None),
+}
 
 _IDLE_POLL = 0.2
+
+#: "Ironbow"-style false-color stops (value 0-255 -> RGB) for mono16 frames
+#: - see _decode_mono16(). A plain grayscale ramp reads as "completely dark"
+#: for real thermal/depth data: it has far more low/mid values than bright
+#: ones, so most of a frame lands in the low, hard-to-distinguish end of a
+#: linear gray ramp. This palette's own steepest color change sits in that
+#: same low-mid range, trading many shades of near-black for a perceptible
+#: black -> purple -> orange -> yellow -> white sweep.
+_THERMAL_STOPS = (0, 64, 128, 192, 255)
+_THERMAL_COLORS = ((0, 0, 0), (60, 0, 110), (170, 20, 90), (255, 120, 20), (255, 255, 200))
+
+
+def _build_thermal_lut():
+    if np is None:
+        return None
+    xs = np.arange(256, dtype=np.float32)
+    channels = [
+        np.interp(xs, _THERMAL_STOPS, [c[i] for c in _THERMAL_COLORS])
+        for i in range(3)
+    ]
+    return np.stack(channels, axis=1).astype(np.uint8)
+
+
+_THERMAL_LUT = _build_thermal_lut()
+
+
+@dataclass
+class CameraSlot:
+    """One subscribed (or empty) topic's latest decoded frame + stats."""
+
+    topic: str = ""
+    subscribed_topic: str = ""
+    #: "image", "compressed", or "" while the topic's type hasn't resolved yet.
+    msg_kind: str = ""
+    frame_width: int = 0
+    frame_height: int = 0
+    frame_rgb: bytes = b""       # raw RGB24, frame_width * frame_height * 3
+    frame_count: int = 0
+    fps: float = 0.0
+    last_frame_at: float = 0.0
+    error: str = ""
+    #: Non-fatal note shown alongside a still-rendered frame - e.g. a mono16
+    #: source with no pixel-to-pixel variation to color by (see
+    #: _decode_mono16()), which isn't an error but does mean "no gradient to
+    #: show" rather than "lazypx4 failed to render it".
+    note: str = ""
 
 
 @dataclass
 class CameraStats:
-    available: bool = False       # `ffmpeg` found on PATH
-    checked: bool = False         # the PATH check has run at least once
-
-    enabled: bool = False         # user has turned the feed on
-    capturing: bool = False       # ffmpeg session is starting/running
-    low_bandwidth: bool = False
-
-    device: str = ""
-    error: str = ""
-
-    full_width: int = CAMERA_FULL_WIDTH    # runtime-adjustable via [j]/[k]
-    full_height: int = CAMERA_FULL_HEIGHT
-
-    frame_width: int = 0
-    frame_height: int = 0
-    frame_rgb: bytes = b""        # raw RGB24, frame_width * frame_height * 3
-    frame_count: int = 0
-    fps: float = 0.0
-    last_frame_at: float = 0.0
-
+    available: bool = False       # rclpy / sensor_msgs / numpy all importable
+    checked: bool = False         # the availability check has run at least once
+    low_bandwidth: bool = False   # render-side only - see CAMERA_LOW_BW_MAX_COLS
+    slots: list = field(default_factory=lambda: [CameraSlot() for _ in range(NUM_SLOTS)])
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -87,94 +134,7 @@ stats = CameraStats()
 
 
 def camera_available():
-    return shutil.which("ffmpeg") is not None
-
-
-def _preset():
-    with stats.lock:
-        low_bw = stats.low_bandwidth
-        full_width = stats.full_width
-        full_height = stats.full_height
-    if low_bw:
-        return CAMERA_LOW_BW_WIDTH, CAMERA_LOW_BW_HEIGHT, CAMERA_LOW_BW_FPS, True
-    return full_width, full_height, CAMERA_FULL_FPS, False
-
-
-def adjust_full_resolution(bigger):
-    """[k]/[j] on the camera screen: scale the "full" preset's resolution
-    up/down, aspect ratio held fixed. Takes effect on the next capture
-    session (immediately, if the feed is already running)."""
-    factor = CAMERA_FULL_RES_STEP if bigger else (1.0 / CAMERA_FULL_RES_STEP)
-    with stats.lock:
-        new_width = int(round(clamp(stats.full_width * factor, CAMERA_FULL_WIDTH_MIN, CAMERA_FULL_WIDTH_MAX)))
-        stats.full_width = new_width
-        stats.full_height = max(2, int(round(new_width * _FULL_ASPECT)))
-
-
-def _spawn(device, width, height, fps, input_format):
-    args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "v4l2"]
-    if input_format:
-        args += ["-input_format", input_format]
-    args += [
-        "-framerate", str(fps), "-video_size", f"{width}x{height}",
-        "-i", device,
-        "-vf", f"scale={width}:{height}",
-        "-pix_fmt", "rgb24", "-f", "rawvideo",
-        "-",
-    ]
-    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-
-def _read_exact(stream, n, deadline):
-    """Read exactly `n` bytes from `stream`, or None on EOF/timeout. Uses
-    ``select`` so a stalled (but still-open) pipe can't block past the
-    deadline the way a plain ``stream.read()`` would."""
-    buf = bytearray()
-    fd = stream.fileno()
-    while len(buf) < n:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None
-        ready, _, _ = select.select([fd], [], [], remaining)
-        if not ready:
-            return None
-        chunk = stream.read(n - len(buf))
-        if not chunk:
-            return None
-        buf.extend(chunk)
-    return bytes(buf)
-
-
-def _drain_stderr(proc):
-    try:
-        data = proc.stderr.read()
-    except Exception:
-        data = b""
-    text = (data or b"").decode("utf-8", errors="replace").strip()
-    lines = text.splitlines()
-    return lines[-1][:200] if lines else ""
-
-
-def _stop(proc):
-    if proc is None:
-        return
-    try:
-        proc.kill()
-        proc.wait(timeout=2.0)
-    except Exception:
-        pass
-
-
-def toggle_enabled(enable):
-    """Turn capture on/off. Starting is what needs the confirmation prompt
-    upstream (in navigation.py) - stopping is always safe to do immediately."""
-    with stats.lock:
-        stats.enabled = enable
-        if enable:
-            stats.device = settings.camera_device
-            stats.error = ""
-        else:
-            stats.capturing = False
+    return rclpy is not None and Image is not None and np is not None
 
 
 def toggle_low_bandwidth():
@@ -182,121 +142,240 @@ def toggle_low_bandwidth():
         stats.low_bandwidth = not stats.low_bandwidth
 
 
-def _session_target():
-    with stats.lock:
-        return stats.enabled, stats.device or settings.camera_device, stats.low_bandwidth
+def _configured_topics():
+    return [settings.camera_topic_1, settings.camera_topic_2]
 
 
-def _run_session(device, width, height, fps, low_bandwidth, input_format):
-    """Run one ffmpeg capture session until settings change, the feed is
-    turned off, the stream errors out, or shutdown is requested. Returns
-    True if at least one frame was captured."""
-    frame_size = width * height * 3
+def _decode_mono16(msg):
+    """RGB24 bytes (or None, error) from a 16-bit-per-pixel grayscale
+    sensor_msgs/Image (``mono16``) - common for depth/thermal cameras, where
+    the raw values (millimetres, raw sensor counts, ...) span whatever range
+    the source uses rather than a fixed 0-255 brightness. Contrast-stretched
+    per frame using the 1st/99th percentile rather than the true min/max -
+    a handful of dead/hot pixels at the extreme ends (common on real thermal
+    sensors) would otherwise compress the entire rest of the frame into a
+    few shades near one end, reading as "completely dark" - then mapped
+    through the false-color _THERMAL_LUT instead of plain grayscale, since a
+    linear gray ramp still under-differentiates the low/mid range typical
+    scenes actually live in. Returns (rgb_bytes, error, note) - `note` is
+    set instead of `error` for a frame with no pixel-to-pixel variation at
+    all (some simulated thermal cameras publish a perfectly flat image),
+    since that's "nothing to show a gradient over", not a decode failure."""
+    if msg.step < msg.width * 2:
+        return None, "row stride too small", ""
+
+    needed = msg.height * msg.step
+    if len(msg.data) < needed:
+        return None, "short frame", ""
+
+    raw = np.frombuffer(bytes(msg.data), dtype=np.uint8, count=needed)
+    rows = raw.reshape(msg.height, msg.step)
+    pixel_bytes = np.ascontiguousarray(rows[:, : msg.width * 2])
+    dtype = ">u2" if msg.is_bigendian else "<u2"
+    values = pixel_bytes.view(dtype).reshape(msg.height, msg.width).astype(np.float32)
+
+    vmin, vmax = np.percentile(values, (1.0, 99.0))
+    if vmax <= vmin:
+        vmin, vmax = float(values.min()), float(values.max())
+
+    note = ""
+    if vmax <= vmin:
+        # Flat frame: no gradient to stretch, so every pixel gets the LUT's
+        # midpoint color rather than 0 - a solid black frame here would be
+        # indistinguishable from "nothing rendered", which is misleading
+        # when the topic is fine and simply has a uniform-value source.
+        scaled = np.full((msg.height, msg.width), 128, dtype=np.uint8)
+        note = f"flat frame (every pixel = {vmin:.0f}) - source has no contrast to color by"
+    else:
+        scaled = np.clip((values - vmin) * (255.0 / (vmax - vmin)), 0, 255).astype(np.uint8)
+
+    rgb = _THERMAL_LUT[scaled] if _THERMAL_LUT is not None else np.repeat(scaled[:, :, None], 3, axis=2)
+    return np.ascontiguousarray(rgb).tobytes(), "", note
+
+
+def _decode_raw(msg):
+    """(rgb_bytes, error, note) from a sensor_msgs/Image - see
+    _decode_mono16() for `note`."""
+    if msg.width <= 0 or msg.height <= 0:
+        return None, "empty frame", ""
+
+    if msg.encoding == "mono16":
+        return _decode_mono16(msg)
+
+    info = _ENCODINGS.get(msg.encoding)
+    if info is None:
+        return None, f"unsupported encoding '{msg.encoding}'", ""
+    channels, is_rgb = info
+
+    if msg.step < msg.width * channels:
+        return None, "row stride too small", ""
+
+    needed = msg.height * msg.step
+    if len(msg.data) < needed:
+        return None, "short frame", ""
+
+    raw = np.frombuffer(bytes(msg.data), dtype=np.uint8, count=needed)
+    rows = raw.reshape(msg.height, msg.step)
+    pixels = rows[:, : msg.width * channels].reshape(msg.height, msg.width, channels)
+
+    if channels == 1:
+        rgb = np.repeat(pixels, 3, axis=2)
+    else:
+        rgb = pixels[:, :, :3]
+        if not is_rgb:
+            rgb = rgb[:, :, ::-1]
+
+    return np.ascontiguousarray(rgb).tobytes(), "", ""
+
+
+def _decode_compressed(msg):
+    """RGB24 bytes (or None, error) from a sensor_msgs/CompressedImage."""
+    if PILImage is None:
+        return None, None, None, "Pillow not installed - pip install lazypx4[map]"
 
     try:
-        proc = _spawn(device, width, height, fps, input_format)
-    except OSError as exc:
-        with stats.lock:
-            stats.capturing = False
-            stats.error = f"couldn't run ffmpeg: {exc}"
-        return False
+        img = PILImage.open(io.BytesIO(bytes(msg.data))).convert("RGB")
+    except Exception as exc:
+        return None, None, None, f"couldn't decode: {exc}"
 
-    with stats.lock:
-        stats.capturing = True
-
-    last_rate_count = 0
-    last_rate_time = time.monotonic()
-    logged_error = False
-    got_frame = False
-
-    try:
-        while not shutdown_event.is_set():
-            still_enabled, still_device, _ = _session_target()
-            cur_width, cur_height, cur_fps, cur_low_bw = _preset()
-            if (
-                not still_enabled
-                or still_device != device
-                or (cur_width, cur_height, cur_fps, cur_low_bw) != (width, height, fps, low_bandwidth)
-            ):
-                break
-
-            deadline = time.monotonic() + (
-                CAMERA_START_TIMEOUT if not got_frame else CAMERA_FRAME_TIMEOUT
-            )
-            frame = _read_exact(proc.stdout, frame_size, deadline)
-            now = time.monotonic()
-
-            if frame is None:
-                exited = proc.poll() is not None
-                if not exited:
-                    _stop(proc)  # stalled but still open - kill it so
-                                 # stderr becomes readable without blocking
-                error = _drain_stderr(proc) or (
-                    "ffmpeg exited unexpectedly" if exited else "ffmpeg produced no frame (timed out)"
-                )
-                with stats.lock:
-                    stats.error = error
-                if not logged_error:
-                    logged_error = True
-                    log_warn(f"Camera capture failed: {error}")
-                break
-
-            got_frame = True
-            with stats.lock:
-                stats.frame_rgb = frame
-                stats.frame_width = width
-                stats.frame_height = height
-                stats.frame_count += 1
-                stats.last_frame_at = now
-                stats.error = ""
-                stats.capturing = False
-
-                if now - last_rate_time >= 1.0:
-                    stats.fps = (stats.frame_count - last_rate_count) / (now - last_rate_time)
-                    last_rate_count = stats.frame_count
-                    last_rate_time = now
-    finally:
-        _stop(proc)
-        with stats.lock:
-            stats.capturing = False
-
-    return got_frame
+    return img.tobytes(), img.width, img.height, ""
 
 
 def camera_thread():
     with stats.lock:
         stats.available = camera_available()
         stats.checked = True
-        stats.device = settings.camera_device
 
     if not stats.available:
         return
 
-    # Remembers, per device, which -input_format actually produced frames
-    # last time - so once a working one is found we stop re-probing MJPEG
-    # on every restart, but a device that stops working (unplugged/swapped)
-    # still gets re-probed from the top.
-    format_index = {}
+    context = rclpy.Context()
+    node = None
+    executor = None
+    subscriptions = [None] * NUM_SLOTS
+    rate_bases = [0] * NUM_SLOTS
 
-    while not shutdown_event.is_set():
-        enabled, device, _ = _session_target()
+    def _resolve_kind(topic):
+        """Returns "image" or "compressed" for `topic`, from the graph if
+        it's already publishing, else a name-based guess (many conventions
+        put compressed image transports under a "/compressed" suffix) so a
+        topic can still be subscribed to before its publisher starts."""
+        try:
+            for name, types in node.get_topic_names_and_types():
+                if name == topic:
+                    if any("CompressedImage" in t for t in types):
+                        return "compressed"
+                    if any("/Image" in t for t in types):
+                        return "image"
+        except Exception:
+            pass
+        return "compressed" if topic.endswith("/compressed") else "image"
 
-        if not enabled:
-            time.sleep(_IDLE_POLL)
-            continue
+    def _make_callback(idx):
+        def _on_frame(msg):
+            frame_rgb, width, height, error = _decode_compressed(msg)
+            with stats.lock:
+                slot = stats.slots[idx]
+                if error:
+                    slot.error = error
+                else:
+                    slot.frame_rgb = frame_rgb
+                    slot.frame_width = width
+                    slot.frame_height = height
+                    slot.frame_count += 1
+                    slot.last_frame_at = time.monotonic()
+                    slot.error = ""
+        return _on_frame
 
-        width, height, fps, low_bandwidth = _preset()
-        idx = format_index.get(device, 0) % len(CAMERA_INPUT_FORMATS)
-        input_format = CAMERA_INPUT_FORMATS[idx]
+    def _make_raw_callback(idx):
+        def _on_frame(msg):
+            frame_rgb, error, note = _decode_raw(msg)
+            with stats.lock:
+                slot = stats.slots[idx]
+                if error:
+                    slot.error = error
+                    slot.note = ""
+                else:
+                    slot.frame_rgb = frame_rgb
+                    slot.frame_width = msg.width
+                    slot.frame_height = msg.height
+                    slot.frame_count += 1
+                    slot.last_frame_at = time.monotonic()
+                    slot.error = ""
+                    slot.note = note
+        return _on_frame
 
-        got_frame = _run_session(device, width, height, fps, low_bandwidth, input_format)
-        format_index[device] = idx if got_frame else idx + 1
+    def _subscribe(idx, topic):
+        if subscriptions[idx] is not None:
+            node.destroy_subscription(subscriptions[idx])
+            subscriptions[idx] = None
 
-        if shutdown_event.is_set():
-            break
+        with stats.lock:
+            stats.slots[idx] = CameraSlot(topic=topic, subscribed_topic=topic)
 
-        # Back off before retrying so a persistently failing device (wrong
-        # path, unplugged, in use by another process) doesn't spin ffmpeg.
-        still_enabled, _, _ = _session_target()
-        if still_enabled:
-            time.sleep(CAMERA_RETRY_INTERVAL)
+        if not topic:
+            return
+
+        kind = _resolve_kind(topic)
+        msg_cls = CompressedImage if kind == "compressed" else Image
+        callback = _make_callback(idx) if kind == "compressed" else _make_raw_callback(idx)
+        subscriptions[idx] = node.create_subscription(msg_cls, topic, callback, qos_profile_sensor_data)
+
+        with stats.lock:
+            stats.slots[idx].msg_kind = kind
+
+        rate_bases[idx] = 0
+
+    try:
+        rclpy.init(args=None, context=context)
+        node = Node("lazypx4_camera_reader", context=context)
+
+        # One long-lived executor rather than rclpy.spin_once()'s free
+        # function - see lazypx4.lidar's lidar_thread for why (a
+        # shutdown-order bug in a fresh temporary executor's own __del__).
+        executor = SingleThreadedExecutor(context=context)
+        executor.add_node(node)
+
+        for idx, topic in enumerate(_configured_topics()):
+            _subscribe(idx, topic)
+
+        last_rate_time = time.monotonic()
+
+        while not shutdown_event.is_set():
+            wanted = _configured_topics()
+            with stats.lock:
+                current = [slot.subscribed_topic for slot in stats.slots]
+            for idx in range(NUM_SLOTS):
+                if wanted[idx] != current[idx]:
+                    _subscribe(idx, wanted[idx])
+
+            executor.spin_once(timeout_sec=0.2)
+
+            now = time.monotonic()
+            if now - last_rate_time >= 1.0:
+                with stats.lock:
+                    for idx, slot in enumerate(stats.slots):
+                        slot.fps = float(slot.frame_count - rate_bases[idx]) / (now - last_rate_time)
+                        rate_bases[idx] = slot.frame_count
+                last_rate_time = now
+    except Exception as exc:
+        log_warn(f"Camera preview unavailable: {exc}")
+    finally:
+        if executor is not None:
+            try:
+                executor.remove_node(node)
+            except Exception:
+                pass
+            try:
+                executor.shutdown()
+            except Exception:
+                pass
+        if node is not None:
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+        try:
+            rclpy.shutdown(context=context)
+        except Exception:
+            pass

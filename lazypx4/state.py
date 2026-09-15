@@ -416,9 +416,16 @@ class State:
     lidar_range_min: float = 0.0
     lidar_range_max: float = 0.0
     lidar_view_range: float = 10.0
-    #: "top" (bird's eye, X/Y), "front" (elevation, Y/Z) or "oblique"
-    #: (45-degree, both at once) - see lazypx4.render.pointcloud._VIEWS.
+    #: "top" (bird's eye, X/Y), "front" (elevation, Y/Z), "oblique"
+    #: (45-degree, both at once) or "free" (freely rotated with hjkl) - see
+    #: lazypx4.render.pointcloud._VIEWS and _free_view().
     lidar_view_mode: str = "top"
+    #: The mode [c] restores on toggling the free camera back off.
+    lidar_prev_view_mode: str = "top"
+    #: Free camera orientation (degrees), rotated with hjkl while
+    #: `lidar_view_mode == "free"` - see lazypx4.render.pointcloud._free_view().
+    lidar_cam_yaw: float = 45.0
+    lidar_cam_pitch: float = 30.0
 
     lock: threading.RLock = field(default_factory=threading.RLock)
 

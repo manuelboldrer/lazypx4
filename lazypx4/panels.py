@@ -44,7 +44,7 @@ SCREEN_TITLES = {
     "estimation": "PX4 ESTIMATION / SENSORS",
     "control": "PX4 CONTROL / SETPOINTS",
     "rc": "PX4 RC · STICKS / CHANNELS",
-    "camera": "LOCAL CAMERA PREVIEW",
+    "camera": "ROS CAMERA PREVIEW",
     "map": "PX4 POSITION MAP · plan view, up = North",
     "pointcloud": "LIDAR POINT CLOUD OVERVIEW",
     "calibration": "PX4 SENSOR CALIBRATION",
