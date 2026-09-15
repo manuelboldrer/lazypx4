@@ -66,6 +66,12 @@ class Settings:
     #: subscribes to - see :mod:`lazypx4.lidar`.
     lidar_topic: str = "/livox/points"
 
+    #: ROS 2 image topics (sensor_msgs/Image or CompressedImage) the [w]
+    #: camera screen subscribes to - up to two, shown at once. An empty
+    #: string leaves that slot unused. See :mod:`lazypx4.camera`.
+    camera_topic_1: str = "/camera/image_raw"
+    camera_topic_2: str = ""
+
 
 settings = Settings()
 
@@ -113,6 +119,16 @@ POS_ACC_OK = 3.0
 # RC link signal strength / quality, percent.
 RC_SIGNAL_GOOD = 70
 RC_SIGNAL_OK = 30
+
+# RC_CHANNELS raw PWM microsecond range - the near-universal RC convention
+# (1000 = stick/lever full one way, 1500 = centre, 2000 = full the other way).
+# A channel can overtravel slightly past 1000/2000 depending on transmitter
+# endpoint calibration, hence the wider display clamp on the [r] RC screen.
+RC_PWM_MIN = 1000
+RC_PWM_CENTER = 1500
+RC_PWM_MAX = 2000
+RC_PWM_DISPLAY_MIN = 800
+RC_PWM_DISPLAY_MAX = 2200
 
 # Rangefinder signal quality, percent.
 RANGEFINDER_SIGNAL_GOOD = 70
@@ -205,6 +221,14 @@ JOG_MIN_INTERVAL = 0.12
 
 
 # ---------------------------------------------------------------------------
+# LiDAR point-cloud free camera ([v] screen, [c] to toggle, hjkl to rotate)
+# ---------------------------------------------------------------------------
+
+# Degrees of yaw/pitch each hjkl press adds to the free camera.
+LIDAR_CAM_ROTATE_STEP = 5.0
+
+
+# ---------------------------------------------------------------------------
 # MAVLink shell (NSH console)
 # ---------------------------------------------------------------------------
 #
@@ -250,6 +274,27 @@ LOG_CHUNK_RETRIES = 5
 # (typically ~0.5-2 m at a normal zoom) would otherwise justify.
 POSITION_TRAIL_MIN_SPACING_M = 0.2
 POSITION_TRAIL_MAXLEN = 1000
+
+
+# ---------------------------------------------------------------------------
+# ROS camera preview ([w] screen - see lazypx4.camera)
+# ---------------------------------------------------------------------------
+#
+# Subscribes to up to two ROS 2 image topics (sensor_msgs/Image or
+# CompressedImage - see settings.camera_topic_1/camera_topic_2), the same
+# "just subscribe, no confirmation needed" approach lazypx4.lidar uses for
+# the [v] point-cloud screen, since a topic subscription carries none of the
+# V4L2/ffmpeg approach's old "opens real hardware" cost. Frame size/rate are
+# whatever the publisher sends - lazypx4 doesn't control the source, only how
+# it's drawn.
+#
+# [b] on that screen switches the renderer between full ANSI truecolor
+# half-blocks and a colourless ASCII ramp capped to CAMERA_LOW_BW_MAX_COLS -
+# a client-side-only choice (unlike the old ffmpeg preset pair, it can't
+# reduce what the publisher sends) meant for a slow link such as a
+# telemetry radio or a thin cellular tether, where every byte the terminal
+# redraw writes matters.
+CAMERA_LOW_BW_MAX_COLS = 48
 
 
 # ---------------------------------------------------------------------------

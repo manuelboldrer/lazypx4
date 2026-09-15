@@ -37,6 +37,11 @@ def draw_about_screen():
     lines.append("   " + MAGENTA + _SPONSOR_URL + RESET)
     lines.append("")
 
+    lines.append(ui_section("ACKNOWLEDGMENTS"))
+    lines.append("   Saxion University of Applied Sciences")
+    lines.append("   Smart Mechatronics and Robotics Group")
+    lines.append("")
+
     lines.append(ui_section("VERSION"))
     lines.append(f"   lazypx4 {__version__}")
     lines.append("")

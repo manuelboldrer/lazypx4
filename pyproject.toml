@@ -29,15 +29,17 @@ dependencies = [
 # HOME/ROBOT pins and a scale bar. Without it the raw imagery is still saved.
 map = ["Pillow>=9.0"]
 dev = ["pytest>=7", "pyflakes"]
-# lazypx4.rosclock and lazypx4.lidar ([v] point-cloud screen) import rclpy
-# (and, for lidar, sensor_msgs.msg.PointCloud2) themselves from the sourced
-# ROS 2 install (via PYTHONPATH, not pip) - but rclpy transitively imports
-# PyYAML and numpy, which normally come from apt (python3-yaml,
-# python3-numpy) rather than the venv, and lidar's own PointCloud2 decoding
-# uses numpy directly too. A venv created without --system-site-packages
-# won't see those apt packages, so rclpy import fails with "No module named
-# 'yaml'" (or numpy) and the dashboard's ROS clock / the point-cloud screen
-# silently fall back to "not found".
+# lazypx4.rosclock, lazypx4.lidar ([v] point-cloud screen) and lazypx4.camera
+# ([w] camera screen) import rclpy (and sensor_msgs.msg.PointCloud2/Image/
+# CompressedImage) themselves from the sourced ROS 2 install (via
+# PYTHONPATH, not pip) - but rclpy transitively imports PyYAML and numpy,
+# which normally come from apt (python3-yaml, python3-numpy) rather than the
+# venv, and lidar/camera's own message decoding uses numpy directly too. A
+# venv created without --system-site-packages won't see those apt packages,
+# so rclpy import fails with "No module named 'yaml'" (or numpy) and the
+# dashboard's ROS clock / the point-cloud screen / the camera screen
+# silently fall back to "not found". A camera topic published as
+# CompressedImage additionally needs Pillow (the "map" extra) to decode.
 ros = ["PyYAML>=6.0", "numpy>=1.21"]
 # Runtime deps of the standalone PX4 scripts under Tools/ that lazypx4.pxtools
 # shells out to with `sys.executable` - pyserial/six for px_uploader.py,
@@ -46,6 +48,10 @@ ros = ["PyYAML>=6.0", "numpy>=1.21"]
 # upload-to-web and [a] EKF-health-check actions fail with the same
 # "pip install ..." hint those scripts print for themselves.
 tools = ["pyserial>=3.5", "requests>=2.31", "six>=1.16", "pyulog>=1.0", "numpy>=1.21", "matplotlib>=3.5"]
+# lazypx4.netmon shells out to the `speedtest` CLI for the [u] host screen's
+# on-demand internet speed test ([i]). Without it that test just reports
+# "'speedtest' not found".
+net = ["speedtest-cli>=2.1"]
 
 # Fill in once the repo is pushed:
 # [project.urls]

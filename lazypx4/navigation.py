@@ -12,6 +12,7 @@ import os
 import queue
 import time
 
+from . import camera as camera_mod
 from . import search
 from .config import (
     FLIGHT_LOG_PAGE_SIZE,
@@ -20,6 +21,7 @@ from .config import (
     JOG_STEP_MAX_M,
     JOG_STEP_MIN_M,
     JOG_YAW_STEP_DEG,
+    LIDAR_CAM_ROTATE_STEP,
     MODE_PAGE_SIZE,
     PARAM_PAGE_SIZE,
     settings,
@@ -600,6 +602,84 @@ def handle_control_key(key):
 
 
 # ---------------------------------------------------------------------------
+# RC input screen (stick positions + raw channels)
+# ---------------------------------------------------------------------------
+
+
+def open_rc_screen():
+    session.screen = "rc"
+
+    if session.link is not None:
+        configure_streams(session.link)
+
+
+def handle_rc_key(key):
+    if key == "r":
+        session.screen = "dashboard"
+        return
+
+    if key == "ESC":
+        _focus_sidebar()
+        return
+
+    _scroll_main(key)
+
+
+# ---------------------------------------------------------------------------
+# ROS camera preview screen
+# ---------------------------------------------------------------------------
+
+
+def open_camera_screen():
+    session.screen = "camera"
+
+
+def open_camera_topic_input(slot):
+    current = settings.camera_topic_1 if slot == 0 else settings.camera_topic_2
+    request_input(
+        f"Camera {slot + 1} topic (current: {current or 'unset'}, blank to clear):",
+        lambda text: _camera_topic_submit(slot, text),
+    )
+
+
+def _camera_topic_submit(slot, text):
+    text = text.strip()
+    if text and not text.startswith("/"):
+        text = "/" + text
+
+    if slot == 0:
+        settings.camera_topic_1 = text
+    else:
+        settings.camera_topic_2 = text
+
+    log_command(f"Camera {slot + 1} topic changed to {text or '(none)'}")
+
+
+def handle_camera_key(key):
+    if key == "w":
+        session.screen = "dashboard"
+        return
+
+    if key == "ESC":
+        _focus_sidebar()
+        return
+
+    if key == "1":
+        open_camera_topic_input(0)
+        return
+
+    if key == "2":
+        open_camera_topic_input(1)
+        return
+
+    if key == "b":
+        camera_mod.toggle_low_bandwidth()
+        return
+
+    _scroll_main(key)
+
+
+# ---------------------------------------------------------------------------
 # Position map screen
 # ---------------------------------------------------------------------------
 
@@ -716,6 +796,28 @@ def handle_pointcloud_key(key):
     if key == "3":
         with state.lock:
             state.lidar_view_mode = "oblique"
+        return
+
+    if key == "c":
+        with state.lock:
+            if state.lidar_view_mode == "free":
+                state.lidar_view_mode = state.lidar_prev_view_mode
+            else:
+                state.lidar_prev_view_mode = state.lidar_view_mode
+                state.lidar_view_mode = "free"
+        return
+
+    if key in ("h", "j", "k", "l"):
+        with state.lock:
+            if state.lidar_view_mode == "free":
+                if key == "h":
+                    state.lidar_cam_yaw = (state.lidar_cam_yaw - LIDAR_CAM_ROTATE_STEP) % 360.0
+                elif key == "l":
+                    state.lidar_cam_yaw = (state.lidar_cam_yaw + LIDAR_CAM_ROTATE_STEP) % 360.0
+                elif key == "k":
+                    state.lidar_cam_pitch = clamp(state.lidar_cam_pitch + LIDAR_CAM_ROTATE_STEP, -90.0, 90.0)
+                elif key == "j":
+                    state.lidar_cam_pitch = clamp(state.lidar_cam_pitch - LIDAR_CAM_ROTATE_STEP, -90.0, 90.0)
         return
 
     if key == "t":
@@ -1499,6 +1601,14 @@ def process_key(key):
         handle_control_key(key)
         return
 
+    if session.screen == "rc":
+        handle_rc_key(key)
+        return
+
+    if session.screen == "camera":
+        handle_camera_key(key)
+        return
+
     if session.screen == "map":
         handle_map_key(key)
         return
@@ -1534,6 +1644,8 @@ _SCREEN_OPENERS = {
     "t": open_shell_screen,
     "e": open_estimation_screen,
     "c": open_control_screen,
+    "r": open_rc_screen,
+    "w": open_camera_screen,
     "n": open_map_screen,
     "s": open_calibration_screen,
     "u": open_host_screen,

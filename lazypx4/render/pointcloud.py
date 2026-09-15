@@ -2,8 +2,10 @@
 message plus a scatter view, drawn in the sensor's own frame (not the
 vehicle's NED frame the [n] map uses - see lazypx4.lidar). [1] switches to a
 top-down (bird's eye) projection, [2] to a front (elevation) projection, [3]
-to a 45-degree oblique projection that shows both at once. [t] changes the
-subscribed topic without restarting lazypx4.
+to a 45-degree oblique projection that shows both at once. [c] toggles a
+freely-rotatable camera instead, panned/tilted with [hjkl] (h/l = yaw,
+j/k = pitch) - see _free_view(). [t] changes the subscribed topic without
+restarting lazypx4.
 
 Points are packed into Unicode Braille characters (each cell holds a 2x4 dot
 sub-grid) instead of one "." per terminal cell: an ordinary character grid at
@@ -62,6 +64,35 @@ _VIEWS = {
 }
 
 
+def _free_view(yaw_deg, pitch_deg):
+    """Build a _VIEWS-shaped entry for the freely-rotated [c] camera: yaw
+    pans around the vertical (Z) axis, pitch then tilts between looking
+    level (0 deg, matching the "front" view) and straight down (90 deg,
+    matching "top") - two plain Euler rotations, always well-defined (no
+    gimbal divide-by-zero) since each only ever turns two of the three
+    axes."""
+    yaw, pitch = math.radians(yaw_deg), math.radians(pitch_deg)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+
+    def horiz(x, y, z):
+        return -(-x * sy + y * cy)
+
+    def vert(x, y, z):
+        return (x * cy + y * sy) * sp + z * cp
+
+    def depth(x, y, z):
+        return (x * cy + y * sy) * cp - z * sp
+
+    return {
+        "label": f"Free camera (yaw {yaw_deg:.0f} deg / pitch {pitch_deg:.0f} deg)",
+        "depth_label": "View axis",
+        "horiz": horiz,
+        "vert": vert,
+        "depth": depth,
+    }
+
+
 def _color_for(value, value_min, value_max):
     if value_max <= value_min:
         return _COLOR_BANDS[0]
@@ -92,6 +123,8 @@ def draw_pointcloud_screen():
         zs = list(state.lidar_sample_z)
         view_range = state.lidar_view_range
         view_mode = state.lidar_view_mode
+        cam_yaw = state.lidar_cam_yaw
+        cam_pitch = state.lidar_cam_pitch
 
     lines = []
 
@@ -104,7 +137,7 @@ def draw_pointcloud_screen():
         lines.append(DIM + "v = back    ESC = panels" + RESET)
         return lines
 
-    view = _VIEWS.get(view_mode, _VIEWS["top"])
+    view = _free_view(cam_yaw, cam_pitch) if view_mode == "free" else _VIEWS.get(view_mode, _VIEWS["top"])
     view_range = max(view_range, 0.5)
 
     lines.append(f" Topic: {settings.lidar_topic}   Frame: {frame_id or '--'}")
@@ -183,9 +216,15 @@ def draw_pointcloud_screen():
         lines.append("  " + "".join(row))
 
     lines.append("")
-    lines.append(
-        "[+]/[-] zoom   [0] reset   [1] top   [2] front   [3] 45deg"
-        "   [t] topic   v = back   ESC = panels"
-    )
+    if view_mode == "free":
+        lines.append(
+            "[+]/[-] zoom   [0] reset   [hjkl] rotate   [c] fixed views"
+            "   [t] topic   v = back   ESC = panels"
+        )
+    else:
+        lines.append(
+            "[+]/[-] zoom   [0] reset   [1] top   [2] front   [3] 45deg"
+            "   [c] free camera   [t] topic   v = back   ESC = panels"
+        )
 
     return lines
