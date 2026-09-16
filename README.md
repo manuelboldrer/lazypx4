@@ -143,6 +143,13 @@ just report the script as not found. Installing the `tools` extra above
 gets you these scripts' own runtime dependencies (pyserial, requests,
 pyulog, ...); it does not fetch the scripts themselves.
 
+### Standalone binary
+
+`./build_binary.sh` builds a standalone, single-file `lazypx4` executable
+with PyInstaller - it bundles Python and every pip dependency, so it runs
+without activating `.venv` or having Python installed system-wide - and
+symlinks it into `~/.local/bin/lazypx4` so it's on `PATH`.
+
 ## Run
 
 ```bash
@@ -178,48 +185,6 @@ mavlink start -u 14560 -o 14560 -m normal -r 4000000
 > not stream `STATUSTEXT`, so calibration prompts won't appear. Use a
 > `normal`-mode instance (`lazypx4` also re-requests `STATUSTEXT` / `EVENT`
 > on start and on `[r]`).
-
-## Layout
-
-```
-lazypx4/                (repo root)
-├── Tools -> ../PX4-Autopilot/Tools   symlink, see "Tools/" above
-└── lazypx4/
-    ├── config.py       constants, lookup tables, runtime Settings
-    ├── util.py         safe_int / safe_float / clamp / finite
-    ├── ansi.py         escape codes, terminal cursor, screen chrome
-    ├── models.py       LogEvent, PendingArm, CustomMode, FlightLogEntry, Parameter
-    ├── state.py        State (vehicle) + Session (UI) singletons, queues
-    ├── eventlog.py     the in-memory event log + STATUSTEXT classification
-    ├── search.py       the "/" incremental search shared by the list screens
-    ├── sysmon.py       host CPU / RAM / disk + rosbag / zenoh / xrce-agent checks
-    ├── netmon.py       host USB devices + Wi-Fi/Ethernet/IP checks (the [u] screen)
-    ├── rosclock.py     optional rclpy node mirroring ROS 2 "now" for the dashboard
-    ├── lidar.py        optional rclpy node summarizing a PointCloud2 topic ([v] screen)
-    ├── jobs.py         generic background-subprocess runner (flash / upload / EKF check)
-    ├── pxtools.py      wraps the standalone PX4 scripts under Tools/ as jobs
-    ├── terminal.py     raw-mode setup + the keyboard reader thread
-    ├── navigation.py   key -> action controller, screen switching, confirmations
-    ├── satellite.py    satellite-image snapshot (background thread)
-    ├── app.py          connect, start threads, run the render/poll loop
-    ├── mavlink/
-    │   ├── connection.py    connect, GCS heartbeat, stream setup, vehicle_ready
-    │   ├── receiver.py      the background MAVLink receiver + dispatch table
-    │   ├── handlers.py      per-message telemetry handlers
-    │   ├── commands.py      arm/disarm, set_mode, hold, reboot
-    │   ├── guided.py        takeoff / land / RTL / "goto" / jog (MAV_CMD_DO_REPOSITION)
-    │   ├── modes.py         Standard Modes Protocol (AVAILABLE_MODES / CURRENT_MODE)
-    │   ├── parameters.py    PX4 parameter protocol
-    │   ├── calibration.py   MAV_CMD_PREFLIGHT_CALIBRATION
-    │   ├── flightlog.py     ULog listing + fast queue-based downloader
-    │   └── shell.py         NSH console over SERIAL_CONTROL
-    └── render/
-        ├── chrome.py     frame painting + colour/label helpers
-        ├── jobpanel.py   shared "background job" status block (flash/upload/EKF)
-        └── *.py          one module per screen (dashboard, about, host, firmware,
-                           pointcloud, mode_select, control, estimation, calibration,
-                           eventlog_screen, flightlog, parameters, shell, ...)
-```
 
 ## Status
 
