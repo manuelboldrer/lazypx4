@@ -52,11 +52,10 @@ class Settings:
     #: flashing), ``upload_log.py`` (.ulog web upload) and
     #: ``ecl_ekf/process_logdata_ekf.py`` (EKF health-check report). Relative
     #: to the current working directory, same as ``log_dir``/``map_dir``/
-    #: ``firmware_dir`` above - lazypx4 is normally run from inside the
-    #: ``lazypx4/`` project directory (as a checkout, or as the standalone
-    #: binary from ``build_binary.sh`` copied onto ``$PATH`` but still run
-    #: from there), which is exactly where ``Tools/`` sits one level up.
-    tools_dir: str = "../Tools"
+    #: ``firmware_dir`` above - lazypx4 is normally run from inside this
+    #: repo checkout, where ``Tools`` is a symlink (checked into git, see
+    #: the README) to a sibling PX4-Autopilot checkout's own ``Tools/``.
+    tools_dir: str = "./Tools"
 
     #: Server ``upload_log.py`` posts a downloaded .ulog to for the
     #: flight-log screen's [u] "upload to web" action.

@@ -2,31 +2,30 @@
 
 A terminal UI for a PX4 vehicle over MAVLink, in the spirit of
 [lazygit](https://github.com/jesseduffield/lazygit) and
-[lazydocker](https://github.com/jesseduffield/lazydocker), inspired by [mrs_uav_status](https://github.com/ctu-mrs/mrs_uav_status.git): one screen, a
-single keypress per view, sensible defaults, nothing to configure to get
-started.
+[lazydocker](https://github.com/jesseduffield/lazydocker), inspired by [mrs_uav_status](https://github.com/ctu-mrs/mrs_uav_status.git).
+
+QGroundControl is built for one operator, one vehicle, a mouse and a lot of
+screen space. `lazypx4` is for the other case: driving PX4 over SSH, from a
+companion computer, or across a fleet of vehicles at once, where spinning up
+a full GCS per UAV doesn't scale and every click and window switch costs
+time. There is nothing to click - every screen and every action is a single
+keypress, navigated vim-style (`j`/`k`, `Ctrl-D`/`Ctrl-U`, `/` search, ...),
+with sensible defaults and nothing to configure to get started. One screen,
+one keypress per view, a much faster and cleaner workflow than a mouse-driven
+GCS - and one you can run N of, side by side in a terminal multiplexer, for a
+multi-UAV setup.
+
+It goes beyond MAVLink telemetry, too: the `[v]` LiDAR and `[w]` camera
+screens embed live ROS 2 visualization (`PointCloud2`, `Image`/
+`CompressedImage`) right next to the flight state, and the dashboard's
+**HOST**/**SVC** lines and the `[u]` screen monitor the companion computer
+itself - CPU/RAM/disk load, whether rosbag/Zenoh/the uXRCE-DDS agent are up,
+USB device enumeration, Wi-Fi/Ethernet link. Vehicle state, sensor feeds and
+companion-computer health all on one screen make it a genuinely useful
+**preflight check**: arming/GPS/EKF status, sensor calibration, camera/LiDAR
+feeds and companion-computer health, all glanceable before you ever take off.
 
 ![lazypx4 demo](docs/demo.gif)
-
-```
-╭─ PX4 UAV · COMMAND / TELEMETRY
-╰──────────────────────────────────────────────────────────────────────────────
- LINK: CONNECTED    SYS: 1    COMP: 1    LOCKED: YES
- MODE: HOLD
- STATE:  DISARMED
- HOST: CPU  34%   RAM  51% 2.1/4.0G   DISK 62% 14G free   load 0.82
- SVC:  rosbag ● REC    zenoh ● up    xrce-agent ● up
- FLIGHT: [a]arm [d]disarm [T]takeoff [L]land [R]RTL [h]hold [m]mode  (goto/jog on [n] map)
-
- POSITION / VELOCITY ─────────────────────────────────────────────────────────
-   X:     12.400   Y:     -3.100   Z:      4.200 m
-   VX:     0.010   VY:      0.000   VZ:      0.000 m/s
- ...
- SCREENS ────────────────────────────────────────────────────────────────────
-   [m] MODE   [s] CALIBRATE   [n] MAP (goto + jog)   [e] ESTIMATION   [c] CONTROL
-   [p] PARAMETERS   [g] EVENT LOG   [l] FLIGHT LOGS   [t] NSH   [f] FIRMWARE
-   [u] USB/NET   [v] LIDAR   [?] ABOUT   [q]/[ESC] EXIT
-```
 
 ## What it does
 
@@ -118,6 +117,32 @@ The `[w]` camera screen's topics can publish `sensor_msgs/CompressedImage`
 instead of raw `Image`; decoding those additionally needs Pillow (the
 `[map]` extra above).
 
+### `Tools/`
+
+`[f]` flash firmware, the flight-logs screen's `[u]` web upload and `[a]`
+EKF health-check all shell out to real, standalone PX4 scripts rather than
+reimplementing them - `px_uploader.py`, `upload_log.py` and
+`ecl_ekf/process_logdata_ekf.py`. Rather than vendoring copies of them,
+`lazypx4` looks for them under a `Tools/` directory (`--tools-dir`,
+default `./Tools`), and this repo checks in `Tools` as a symlink to
+`../PX4-Autopilot/Tools` - i.e. it expects a
+[PX4-Autopilot](https://github.com/PX4/PX4-Autopilot) checkout as a sibling
+of this one:
+
+```bash
+cd ..
+git clone https://github.com/PX4/PX4-Autopilot.git   # or your own checkout
+cd lazypx4
+```
+
+If your PX4-Autopilot checkout lives somewhere else, either repoint the
+symlink (`ln -sfn /path/to/PX4-Autopilot/Tools Tools`) or pass
+`--tools-dir /path/to/PX4-Autopilot/Tools` instead. Without a valid
+`Tools/`, every other screen and action still works - `[f]`/`[u]`/`[a]`
+just report the script as not found. Installing the `tools` extra above
+gets you these scripts' own runtime dependencies (pyserial, requests,
+pyulog, ...); it does not fetch the scripts themselves.
+
 ## Run
 
 ```bash
@@ -157,42 +182,50 @@ mavlink start -u 14560 -o 14560 -m normal -r 4000000
 ## Layout
 
 ```
-lazypx4/
-├── config.py       constants, lookup tables, runtime Settings
-├── util.py         safe_int / safe_float / clamp / finite
-├── ansi.py         escape codes, terminal cursor, screen chrome
-├── models.py       LogEvent, PendingArm, CustomMode, FlightLogEntry, Parameter
-├── state.py        State (vehicle) + Session (UI) singletons, queues
-├── eventlog.py     the in-memory event log + STATUSTEXT classification
-├── search.py       the "/" incremental search shared by the list screens
-├── sysmon.py       host CPU / RAM / disk + rosbag / zenoh / xrce-agent checks
-├── netmon.py       host USB devices + Wi-Fi/Ethernet/IP checks (the [u] screen)
-├── rosclock.py     optional rclpy node mirroring ROS 2 "now" for the dashboard
-├── lidar.py        optional rclpy node summarizing a PointCloud2 topic ([v] screen)
-├── jobs.py         generic background-subprocess runner (flash / upload / EKF check)
-├── pxtools.py      wraps the standalone PX4 scripts under Tools/ as jobs
-├── terminal.py     raw-mode setup + the keyboard reader thread
-├── navigation.py   key -> action controller, screen switching, confirmations
-├── satellite.py    satellite-image snapshot (background thread)
-├── app.py          connect, start threads, run the render/poll loop
-├── mavlink/
-│   ├── connection.py    connect, GCS heartbeat, stream setup, vehicle_ready
-│   ├── receiver.py      the background MAVLink receiver + dispatch table
-│   ├── handlers.py      per-message telemetry handlers
-│   ├── commands.py      arm/disarm, set_mode, hold, reboot
-│   ├── guided.py        takeoff / land / RTL / "goto" / jog (MAV_CMD_DO_REPOSITION)
-│   ├── modes.py         Standard Modes Protocol (AVAILABLE_MODES / CURRENT_MODE)
-│   ├── parameters.py    PX4 parameter protocol
-│   ├── calibration.py   MAV_CMD_PREFLIGHT_CALIBRATION
-│   ├── flightlog.py     ULog listing + fast queue-based downloader
-│   └── shell.py         NSH console over SERIAL_CONTROL
-└── render/
-    ├── chrome.py     frame painting + colour/label helpers
-    ├── jobpanel.py   shared "background job" status block (flash/upload/EKF)
-    └── *.py          one module per screen (dashboard, about, host, firmware,
-                       pointcloud, mode_select, control, estimation, calibration,
-                       eventlog_screen, flightlog, parameters, shell, ...)
+lazypx4/                (repo root)
+├── Tools -> ../PX4-Autopilot/Tools   symlink, see "Tools/" above
+└── lazypx4/
+    ├── config.py       constants, lookup tables, runtime Settings
+    ├── util.py         safe_int / safe_float / clamp / finite
+    ├── ansi.py         escape codes, terminal cursor, screen chrome
+    ├── models.py       LogEvent, PendingArm, CustomMode, FlightLogEntry, Parameter
+    ├── state.py        State (vehicle) + Session (UI) singletons, queues
+    ├── eventlog.py     the in-memory event log + STATUSTEXT classification
+    ├── search.py       the "/" incremental search shared by the list screens
+    ├── sysmon.py       host CPU / RAM / disk + rosbag / zenoh / xrce-agent checks
+    ├── netmon.py       host USB devices + Wi-Fi/Ethernet/IP checks (the [u] screen)
+    ├── rosclock.py     optional rclpy node mirroring ROS 2 "now" for the dashboard
+    ├── lidar.py        optional rclpy node summarizing a PointCloud2 topic ([v] screen)
+    ├── jobs.py         generic background-subprocess runner (flash / upload / EKF check)
+    ├── pxtools.py      wraps the standalone PX4 scripts under Tools/ as jobs
+    ├── terminal.py     raw-mode setup + the keyboard reader thread
+    ├── navigation.py   key -> action controller, screen switching, confirmations
+    ├── satellite.py    satellite-image snapshot (background thread)
+    ├── app.py          connect, start threads, run the render/poll loop
+    ├── mavlink/
+    │   ├── connection.py    connect, GCS heartbeat, stream setup, vehicle_ready
+    │   ├── receiver.py      the background MAVLink receiver + dispatch table
+    │   ├── handlers.py      per-message telemetry handlers
+    │   ├── commands.py      arm/disarm, set_mode, hold, reboot
+    │   ├── guided.py        takeoff / land / RTL / "goto" / jog (MAV_CMD_DO_REPOSITION)
+    │   ├── modes.py         Standard Modes Protocol (AVAILABLE_MODES / CURRENT_MODE)
+    │   ├── parameters.py    PX4 parameter protocol
+    │   ├── calibration.py   MAV_CMD_PREFLIGHT_CALIBRATION
+    │   ├── flightlog.py     ULog listing + fast queue-based downloader
+    │   └── shell.py         NSH console over SERIAL_CONTROL
+    └── render/
+        ├── chrome.py     frame painting + colour/label helpers
+        ├── jobpanel.py   shared "background job" status block (flash/upload/EKF)
+        └── *.py          one module per screen (dashboard, about, host, firmware,
+                           pointcloud, mode_select, control, estimation, calibration,
+                           eventlog_screen, flightlog, parameters, shell, ...)
 ```
+
+## Status
+
+`lazypx4` is under active testing - if you hit a bug or have an idea for an
+improvement, please [open an issue](https://github.com/manuelboldrer/lazypx4/issues)
+or send a PR. Thanks!
 
 ## Author
 
