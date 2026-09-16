@@ -12,18 +12,18 @@ time. There is nothing to click - every screen and every action is a single
 keypress, navigated vim-style (`j`/`k`, `Ctrl-D`/`Ctrl-U`, `/` search, ...),
 with sensible defaults and nothing to configure to get started. One screen,
 one keypress per view, a much faster and cleaner workflow than a mouse-driven
-GCS - and one you can run N of, side by side in a terminal multiplexer, for a
-multi-UAV setup.
+GCS. Combined with a terminal multiplexer like [tmux](https://tmux.github.io)
+becames a powerfull tool for multi-UAV setup.
 
 It goes beyond MAVLink telemetry, too: the `[v]` LiDAR and `[w]` camera
 screens embed live ROS 2 visualization (`PointCloud2`, `Image`/
-`CompressedImage`) right next to the flight state, and the dashboard's
+`CompressedImage`) right next to the flight state, the dashboard's
 **HOST**/**SVC** lines and the `[u]` screen monitor the companion computer
 itself - CPU/RAM/disk load, whether rosbag/Zenoh/the uXRCE-DDS agent are up,
 USB device enumeration, Wi-Fi/Ethernet link. Vehicle state, sensor feeds and
 companion-computer health all on one screen make it a genuinely useful
-**preflight check**: arming/GPS/EKF status, sensor calibration, camera/LiDAR
-feeds and companion-computer health, all glanceable before you ever take off.
+**preflight check**: arming/GPS/EKF status, camera/LiDAR feeds and companion-computer
+health, all glanceable before you take off.
 
 ![lazypx4 demo](docs/demo.gif)
 
