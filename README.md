@@ -125,6 +125,8 @@ Python and every pip dependency, so it runs without activating `.venv` or
 having Python installed system-wide - and symlinks it into
 `~/.local/bin/lazypx4` so it's on `PATH`.
 
+check install/install.sh folder for the whole procedure.
+
 ### `Tools/`
 
 `[f]` flash firmware, the flight-logs screen's `[u]` web upload and `[a]`
