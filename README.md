@@ -117,6 +117,14 @@ The `[w]` camera screen's topics can publish `sensor_msgs/CompressedImage`
 instead of raw `Image`; decoding those additionally needs Pillow (the
 `[map]` extra above).
 
+### Standalone binary
+
+As an alternative to `pip install`, `./build_binary.sh` builds a
+standalone, single-file `lazypx4` executable with PyInstaller - it bundles
+Python and every pip dependency, so it runs without activating `.venv` or
+having Python installed system-wide - and symlinks it into
+`~/.local/bin/lazypx4` so it's on `PATH`.
+
 ### `Tools/`
 
 `[f]` flash firmware, the flight-logs screen's `[u]` web upload and `[a]`
@@ -142,13 +150,6 @@ symlink (`ln -sfn /path/to/PX4-Autopilot/Tools Tools`) or pass
 just report the script as not found. Installing the `tools` extra above
 gets you these scripts' own runtime dependencies (pyserial, requests,
 pyulog, ...); it does not fetch the scripts themselves.
-
-### Standalone binary
-
-`./build_binary.sh` builds a standalone, single-file `lazypx4` executable
-with PyInstaller - it bundles Python and every pip dependency, so it runs
-without activating `.venv` or having Python installed system-wide - and
-symlinks it into `~/.local/bin/lazypx4` so it's on `PATH`.
 
 ## Run
 
