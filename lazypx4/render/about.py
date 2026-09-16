@@ -10,9 +10,10 @@ from .. import __version__
 from ..ansi import BOLD, CYAN, DIM, MAGENTA, RESET, ui_section
 
 _LOGO = (
-    "╻  ┏━┓╺━┓╻ ╻┏━┓╻ ╻╻ ╻",
-    "┃  ┣━┫┏━┛┗┳┛┣━┛┏╋┛┗━┫",
-    "┗━╸╹ ╹┗━╸ ╹ ╹  ╹ ╹  ╹",
+    "▌  ▞▀▖▀▀▌▌ ▌▛▀▖▌ ▌▌ ▌",
+    "▌  ▙▄▌ ▞ ▝▞ ▙▄▘▝▞ ▚▄▌",
+    "▌  ▌ ▌▞   ▌ ▌  ▞▝▖  ▌",
+    "▀▀▘▘ ▘▀▀▘ ▘ ▘  ▘ ▘  ▘",
 )
 
 _SPONSOR_URL = "https://github.com/sponsors/manuelboldrer"
