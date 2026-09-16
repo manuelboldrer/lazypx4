@@ -68,18 +68,17 @@ def _host_lines():
         zenoh = host.zenoh_running
         xrce_agent = host.xrce_agent_running
 
-    # Plain ASCII status words, not a "*"/"o" bullet glyph: the dashboard
-    # pads every row to the panel width by counting characters, and a glyph
-    # a given terminal/font renders wider than one column throws that count
-    # off, which shows up as the row's right border landing in the wrong
-    # column - color alone already carries REC/up vs off/down here.
+    # U+25CF BLACK CIRCLE: renders single-width in virtually every terminal
+    # font, which matters because the dashboard pads every row to the panel
+    # width by counting characters - a glyph that renders wider than one
+    # column would land the row's right border in the wrong place.
+    def _dot(active):
+        return (GREEN if active else RED) + "●" + RESET
+
     svc = (
-        " SVC:  rosbag "
-        + (GREEN + "REC" + RESET if rosbag else DIM + "off" + RESET)
-        + "    zenoh "
-        + (GREEN + "up" + RESET if zenoh else YELLOW + "down" + RESET)
-        + "    xrce-agent "
-        + (GREEN + "up" + RESET if xrce_agent else YELLOW + "down" + RESET)
+        " SVC:  rosbag " + _dot(rosbag)
+        + "    zenoh " + _dot(zenoh)
+        + "    xrce-agent " + _dot(xrce_agent)
     )
 
     if not ok:

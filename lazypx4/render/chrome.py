@@ -379,9 +379,11 @@ def draw_too_small(width, height):
 
         message = f"Terminal too small ({width}x{height})."
         hint = f"Resize to at least {MIN_TERMINAL_COLS}x{MIN_TERMINAL_ROWS}."
+        tip = "Tip: shrink your terminal's font (Ctrl -) to fit more columns/rows."
 
         sys.stdout.write(truncate_visible(message, max(0, width)) + "\033[K\n")
-        sys.stdout.write(truncate_visible(hint, max(0, width)) + "\033[K")
+        sys.stdout.write(truncate_visible(hint, max(0, width)) + "\033[K\n")
+        sys.stdout.write(truncate_visible(tip, max(0, width)) + "\033[K")
         sys.stdout.write("\033[J")
     finally:
         sys.stdout.write(SYNC_END)
