@@ -348,7 +348,8 @@ def draw_dashboard():
         " FLIGHT: " + BOLD + "[a]" + RESET + "arm  " + BOLD + "[d]" + RESET + "disarm  "
         + BOLD + "[T]" + RESET + "takeoff  " + BOLD + "[L]" + RESET + "land  "
         + BOLD + "[R]" + RESET + "RTL  " + BOLD + "[h]" + RESET + "hold  "
-        + BOLD + "[m]" + RESET + "mode   " + DIM + "goto/jog on the [n] map" + RESET
+        + BOLD + "[m]" + RESET + "mode  " + BOLD + "[E]" + RESET + "EKF reset   "
+        + DIM + "goto/jog on the [n] map" + RESET
     )
 
     speed_h = math.hypot(vx, vy)

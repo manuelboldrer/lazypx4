@@ -124,6 +124,23 @@ def confirm_reboot():
     send_reboot(session.link)
 
 
+def confirm_ekf_reset():
+    with state.lock:
+        already_active = state.shell_active
+
+    if not already_active:
+        if claim_shell(session.link):
+            with state.lock:
+                state.shell_active = True
+        else:
+            log_error("Could not open MAVLink shell for EKF reset")
+            return
+
+    send_shell_raw(session.link, b"ekf stop\n")
+    send_shell_raw(session.link, b"ekf start\n")
+    log_command("EKF reset: ekf stop / ekf start")
+
+
 # ---------------------------------------------------------------------------
 # Generic single-line text input (used by "goto")
 # ---------------------------------------------------------------------------
@@ -1705,6 +1722,13 @@ def _handle_dashboard_key(key):
         request_confirmation(
             "RETURN TO LAUNCH? Type YES",
             lambda: send_rtl(session.link),
+        )
+        return
+
+    if key == "E":
+        request_confirmation(
+            "RESET EKF (ekf stop / ekf start)? Type YES",
+            confirm_ekf_reset,
         )
         return
 
