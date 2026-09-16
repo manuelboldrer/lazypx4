@@ -130,26 +130,23 @@ having Python installed system-wide - and symlinks it into
 `[f]` flash firmware, the flight-logs screen's `[u]` web upload and `[a]`
 EKF health-check all shell out to real, standalone PX4 scripts rather than
 reimplementing them - `px_uploader.py`, `upload_log.py` and
-`ecl_ekf/process_logdata_ekf.py`. Rather than vendoring copies of them,
-`lazypx4` looks for them under a `Tools/` directory (`--tools-dir`,
-default `./Tools`), and this repo checks in `Tools` as a symlink to
-`../PX4-Autopilot/Tools` - i.e. it expects a
-[PX4-Autopilot](https://github.com/PX4/PX4-Autopilot) checkout as a sibling
-of this one:
+`ecl_ekf/process_logdata_ekf.py` (plus the `ecl_ekf/analysis` and
+`ecl_ekf/plotting` modules it imports). `lazypx4` looks for them under a
+`Tools/` directory (`--tools-dir`, default `./Tools`), and this repo checks
+in `Tools` as a vendored copy of those scripts straight from
+[PX4-Autopilot](https://github.com/PX4/PX4-Autopilot) (BSD-3-Clause,
+license kept at `Tools/LICENSE`) - no sibling PX4-Autopilot checkout
+needed, they're used directly from this repo.
 
-```bash
-cd ..
-git clone https://github.com/PX4/PX4-Autopilot.git   # or your own checkout
-cd lazypx4
-```
-
-If your PX4-Autopilot checkout lives somewhere else, either repoint the
-symlink (`ln -sfn /path/to/PX4-Autopilot/Tools Tools`) or pass
-`--tools-dir /path/to/PX4-Autopilot/Tools` instead. Without a valid
-`Tools/`, every other screen and action still works - `[f]`/`[u]`/`[a]`
-just report the script as not found. Installing the `tools` extra above
-gets you these scripts' own runtime dependencies (pyserial, requests,
-pyulog, ...); it does not fetch the scripts themselves.
+To refresh them from a newer PX4-Autopilot release, copy the same files
+back in from a checkout of it (`Tools/px_uploader.py`, `Tools/upload_log.py`,
+`Tools/ecl_ekf/`) and commit the result, or point `--tools-dir` at a PX4-
+Autopilot checkout's `Tools/` directory instead of this repo's copy.
+Without a valid `Tools/`, every other screen and action still works -
+`[f]`/`[u]`/`[a]` just report the script as not found. Installing the
+`tools` extra above gets you these scripts' own runtime dependencies
+(pyserial, requests, pyulog, ...); it does not fetch the scripts
+themselves.
 
 ## Run
 

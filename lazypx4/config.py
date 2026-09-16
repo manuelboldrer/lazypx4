@@ -53,8 +53,8 @@ class Settings:
     #: ``ecl_ekf/process_logdata_ekf.py`` (EKF health-check report). Relative
     #: to the current working directory, same as ``log_dir``/``map_dir``/
     #: ``firmware_dir`` above - lazypx4 is normally run from inside this
-    #: repo checkout, where ``Tools`` is a symlink (checked into git, see
-    #: the README) to a sibling PX4-Autopilot checkout's own ``Tools/``.
+    #: repo checkout, where ``Tools`` is a vendored copy of those PX4-
+    #: Autopilot scripts, checked into git (see the README).
     tools_dir: str = "./Tools"
 
     #: Server ``upload_log.py`` posts a downloaded .ulog to for the
