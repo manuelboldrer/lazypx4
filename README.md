@@ -51,7 +51,7 @@ UDP link and gives you, from one keyboard-driven screen:
 | `f` | Flash firmware | pick a `.px4` file and a serial port, flash via `px_uploader.py` |
 | `u` | USB / network | companion-computer sanity check: USB device enumeration, Wi-Fi/Ethernet link and IP - independent of the MAVLink link |
 | `v` | LiDAR point cloud | summary + scatter view of a ROS 2 `sensor_msgs/PointCloud2` topic (e.g. Livox `/livox/points`), in the sensor's own frame; `1`/`2`/`3` switch top-down / front / oblique projection, `c` toggles a freely-rotatable camera panned/tilted with `hjkl`, `t` changes the subscribed topic |
-| `?` | About | logo, author/contact, sponsor link, version |
+| `?` | About | logo, author/contact, version |
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
 change, parameter set, reboot, calibration, goto, arming jog) goes through a
@@ -194,8 +194,8 @@ or send a PR. Thanks!
 
 ## Author
 
-Manuel Boldrer - manuel.boldrer@gmail.com
-Saxion University of Applied Sciences, Smart Mechatronics and Robotics Group.
+[Manuel Boldrer](https://manuelboldrer.github.io/) - manuel.boldrer@gmail.com
+Saxion University of Applied Sciences, [Smart Mechatronics and Robotics Group](https://www.saxion.edu/research/research-groups/smart-mechatronics-and-robotics).
 
 (Also shown in-app on the `?` About screen, along with the running version.)
 

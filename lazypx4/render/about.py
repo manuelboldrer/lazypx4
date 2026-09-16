@@ -1,4 +1,4 @@
-"""The [?] screen: project logo, author/contact, sponsor link, version.
+"""The [?] screen: project logo, author/contact, version.
 
 Static - no vehicle or host state to read, unlike every other screen in
 :mod:`lazypx4.render`.
@@ -16,7 +16,8 @@ _LOGO = (
     "▀▀▘▘ ▘▀▀▘ ▘ ▘  ▘ ▘  ▘",
 )
 
-_SPONSOR_URL = "https://github.com/sponsors/manuelboldrer"
+_AUTHOR_URL = "https://manuelboldrer.github.io/"
+_GROUP_URL = "https://www.saxion.edu/research/research-groups/smart-mechatronics-and-robotics"
 
 
 def draw_about_screen():
@@ -30,17 +31,14 @@ def draw_about_screen():
     lines.append("")
 
     lines.append(ui_section("AUTHOR"))
-    lines.append("   Manuel Boldrer")
+    lines.append("   Manuel Boldrer  " + MAGENTA + _AUTHOR_URL + RESET)
     lines.append("   manuel.boldrer@gmail.com")
-    lines.append("")
-
-    lines.append(ui_section("SPONSOR"))
-    lines.append("   " + MAGENTA + _SPONSOR_URL + RESET)
     lines.append("")
 
     lines.append(ui_section("ACKNOWLEDGMENTS"))
     lines.append("   Saxion University of Applied Sciences")
     lines.append("   Smart Mechatronics and Robotics Group")
+    lines.append("   " + MAGENTA + _GROUP_URL + RESET)
     lines.append("")
 
     lines.append(ui_section("VERSION"))
