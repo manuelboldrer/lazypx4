@@ -24,7 +24,6 @@ from ..ansi import (
     SYNC_END,
     WHITE,
     YELLOW,
-    clear_screen,
     truncate_visible,
     visible_length,
 )
@@ -373,21 +372,28 @@ def _prompt_lines():
 
 
 def draw_too_small(width, height):
-    sys.stdout.write(SYNC_BEGIN)
-    try:
-        clear_screen()
+    # Build the whole screen as one string and issue a single write(). stdout
+    # is line-buffered when it's a tty, so a write() containing a trailing
+    # "\n" auto-flushes as soon as it returns - a loop of several such
+    # writes becomes several separate small writes to the pty regardless of
+    # the SYNC_BEGIN/SYNC_END bracket around them. A terminal emulator's own
+    # frame compositor usually hides the resulting tearing, but a
+    # multiplexer like tmux redraws its client on its own event-loop tick
+    # and has no such compositor, so the same drip-fed writes show up as a
+    # visibly glitchy repaint there. One write() is one flush.
+    message = f"Terminal too small ({width}x{height})."
+    hint = f"Resize to at least {MIN_TERMINAL_COLS}x{MIN_TERMINAL_ROWS}."
+    tip = "Tip: shrink your terminal's font (Ctrl -) to fit more columns/rows."
 
-        message = f"Terminal too small ({width}x{height})."
-        hint = f"Resize to at least {MIN_TERMINAL_COLS}x{MIN_TERMINAL_ROWS}."
-        tip = "Tip: shrink your terminal's font (Ctrl -) to fit more columns/rows."
+    out = [SYNC_BEGIN, "\033[H"]
+    out.append(truncate_visible(message, max(0, width)) + "\033[K\n")
+    out.append(truncate_visible(hint, max(0, width)) + "\033[K\n")
+    out.append(truncate_visible(tip, max(0, width)) + "\033[K")
+    out.append("\033[J")
+    out.append(SYNC_END)
 
-        sys.stdout.write(truncate_visible(message, max(0, width)) + "\033[K\n")
-        sys.stdout.write(truncate_visible(hint, max(0, width)) + "\033[K\n")
-        sys.stdout.write(truncate_visible(tip, max(0, width)) + "\033[K")
-        sys.stdout.write("\033[J")
-    finally:
-        sys.stdout.write(SYNC_END)
-        sys.stdout.flush()
+    sys.stdout.write("".join(out))
+    sys.stdout.flush()
 
 
 #: Terminal size as of the last rendered frame, so a resize can be told apart
@@ -409,7 +415,18 @@ def draw_lines(lines):
         draw_too_small(width, height)
         return
 
-    sys.stdout.write(SYNC_BEGIN)
+    # Build the whole frame as one string and issue a single write().
+    # sys.stdout is line-buffered when it's a tty, so any write() containing
+    # a trailing "\n" auto-flushes as soon as it returns - the old
+    # per-line loop below was therefore many separate small writes to the
+    # pty, no matter that they were all wrapped in one SYNC_BEGIN/SYNC_END
+    # bracket. A terminal emulator's own frame compositor usually hides the
+    # resulting tearing, but a multiplexer like tmux redraws its client on
+    # its own event-loop tick and has no such compositor (and tmux versions
+    # before 3.7 don't even understand the SYNC_BEGIN/SYNC_END escape
+    # itself), so the same drip-fed writes show up as a visibly glitchy
+    # repaint there. One write() call is one flush and one paint.
+    out = [SYNC_BEGIN]
     try:
         if session.resize_pending:
             session.resize_pending = False
@@ -421,11 +438,11 @@ def draw_lines(lines):
                 # growing the terminal) paints a visible blank flash before
                 # the new frame lands, which reads as the border/title
                 # flickering.
-                sys.stdout.write("\033[2J\033[H")
+                out.append("\033[2J\033[H")
             else:
-                clear_screen()
+                out.append("\033[H")
         else:
-            clear_screen()
+            out.append("\033[H")
 
         # Never emit more rows than the terminal has, and never let a single
         # line exceed the terminal width - either would wrap and scroll the
@@ -444,15 +461,16 @@ def draw_lines(lines):
             frame = lines[:max_lines]
 
         for line in frame[:max_lines]:
-            sys.stdout.write(truncate_visible(line, width) + "\033[K\n")
+            out.append(truncate_visible(line, width) + "\033[K\n")
 
         # Clear only the area below the current frame. Never blank the whole UI.
-        sys.stdout.write("\033[J")
+        out.append("\033[J")
     finally:
         # Always close the synchronized-update bracket, even if something
         # above raised - otherwise a terminal that honours SYNC_BEGIN is left
         # buffering forever and nothing new ever paints again.
-        sys.stdout.write(SYNC_END)
+        out.append(SYNC_END)
+        sys.stdout.write("".join(out))
         sys.stdout.flush()
 
 

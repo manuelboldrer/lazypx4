@@ -44,7 +44,7 @@ env -u PYTHONPATH pyinstaller --onefile -y -n lazypx4 \
     pyinstaller_entry.py
 
 mkdir -p ~/.local/bin
-ln -sf "../../git/lazypx4/dist/lazypx4" ~/.local/bin/lazypx4
+ln -sf "$(pwd)/dist/lazypx4" ~/.local/bin/lazypx4
 
 echo
 echo "Built: $(pwd)/dist/lazypx4"

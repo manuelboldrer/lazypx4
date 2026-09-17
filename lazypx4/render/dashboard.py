@@ -303,11 +303,22 @@ def draw_dashboard():
         f"    LOCKED: {'YES' if vehicle_locked else 'NO'}"
     )
 
+    # These rows are appended unconditionally, blank when inactive, rather
+    # than only when their condition is true. A row that's only sometimes
+    # there shifts every line below it up or down by one the moment its
+    # condition flips (e.g. a prearm failure clearing) - on a redraw that
+    # repaints in place (draw_lines() moves to home and overwrites, it
+    # doesn't clear-then-redraw every frame) that reads as the top of the
+    # screen glitching, a line appearing to be inserted or deleted out from
+    # under the rest of the text. A fixed slot for each keeps every later
+    # line's row number constant regardless of vehicle state.
     if autopilot_version_received:
         fw_text = fw_version_text
         if fw_git_hash:
             fw_text += f" {DIM}{fw_git_hash}{RESET}"
         lines.append(f" FW: {BOLD}{fw_text}{RESET}")
+    else:
+        lines.append("")
 
     lines.append(
         _time_line(
@@ -330,6 +341,8 @@ def draw_dashboard():
 
     if last_preflight_fail:
         lines.append(" " + RED + BOLD + "PREARM: " + last_preflight_fail + RESET)
+    else:
+        lines.append("")
 
     timed_out = []
     if position_timeout_active:
@@ -345,11 +358,15 @@ def draw_dashboard():
         lines.append(
             " " + RED + BOLD + "ALERT: " + ", ".join(timed_out) + " TELEMETRY TIMEOUT" + RESET
         )
+    else:
+        lines.append("")
 
     if fence_breach_status:
         lines.append(
             " " + RED + BOLD + f"ALERT: GEOFENCE BREACH (count {fence_breach_count})" + RESET
         )
+    else:
+        lines.append("")
 
     lines.extend(_host_lines())
 
@@ -411,6 +428,8 @@ def draw_dashboard():
             f"   EKF <-> GPS offset: {offset_color}{dist:5.2f} m{RESET}"
             f"   (N {d_n:+.2f}  E {d_e:+.2f})"
         )
+    else:
+        lines.append("")
 
     lines.append(f"   VX: {vx:9.3f}   VY: {vy:9.3f}   VZ: {vz:9.3f} m/s")
     lines.append(

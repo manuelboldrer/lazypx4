@@ -53,10 +53,6 @@ BG_YELLOW = "\033[43m"
 BG_BLUE = "\033[44m"
 
 
-def clear_screen():
-    sys.stdout.write("\033[H")
-
-
 def hide_cursor():
     sys.stdout.write("\033[?25l")
 
