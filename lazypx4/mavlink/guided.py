@@ -48,19 +48,23 @@ def send_takeoff(master, altitude_m):
             return False
         lat = state.global_lat
         lon = state.global_lon
-        # Home-relative altitude, positive up (GLOBAL_POSITION_INT's
-        # relative_alt) - NOT state.z, which handle_local_position/odometry
-        # also write using NED's positive-DOWN sign, and whichever message
-        # arrived last wins.
-        rel_alt = state.relative_alt
+        # Current AMSL altitude (GLOBAL_POSITION_INT.alt). PX4's mavlink
+        # receiver copies MAV_CMD_NAV_TAKEOFF's z straight into
+        # vehicle_command.param7 with NO frame conversion - the frame given
+        # here (MAV_FRAME_GLOBAL) is only documentation; PX4 always reads
+        # param7 as AMSL for this specific command regardless of what frame
+        # is set, so a relative-altitude value here reads as "N metres above
+        # sea level", which is below the vehicle almost everywhere and makes
+        # PX4 refuse with "Already higher than takeoff altitude".
+        current_amsl = state.global_alt
 
-    target_alt = rel_alt + max(0.0, float(altitude_m))
+    target_alt = current_amsl + max(0.0, float(altitude_m))
 
     try:
         master.mav.command_int_send(
             master.target_system,
             master.target_component,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            mavutil.mavlink.MAV_FRAME_GLOBAL,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
             0, 0,
             0.0,          # param1: pitch (fixed-wing only)

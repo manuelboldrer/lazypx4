@@ -129,7 +129,6 @@ def handle_global_position(msg):
         state.x = safe_float(msg.lat) / 1e7
         state.y = safe_float(msg.lon) / 1e7
         state.z = safe_float(msg.relative_alt) / 1000.0
-        state.relative_alt = state.z
 
         state.vx = safe_float(msg.vx) / 100.0
         state.vy = safe_float(msg.vy) / 100.0
