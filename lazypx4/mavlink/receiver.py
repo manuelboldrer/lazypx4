@@ -11,7 +11,7 @@ import time
 from ..eventlog import log_error, log_info
 from ..state import shutdown_event, state
 from ..util import safe_int
-from . import handlers, modes
+from . import fence, handlers, modes
 from .flightlog import handle_log_data, handle_log_entry
 from .parameters import handle_param_value
 from .shell import handle_serial_control
@@ -39,6 +39,10 @@ _DISPATCH = {
     "ALTITUDE": handlers.handle_altitude,
     "DISTANCE_SENSOR": handlers.handle_distance_sensor,
     "VIBRATION": handlers.handle_vibration,
+    "WIND": handlers.handle_wind,
+    "WIND_COV": handlers.handle_wind_cov,
+    "SERVO_OUTPUT_RAW": handlers.handle_servo_output_raw,
+    "FENCE_STATUS": handlers.handle_fence_status,
     "AUTOPILOT_VERSION": handlers.handle_autopilot_version,
     "SCALED_PRESSURE": handlers.handle_scaled_pressure,
     "SCALED_PRESSURE2": handlers.handle_scaled_pressure,
@@ -58,6 +62,9 @@ _DISPATCH = {
     "SERIAL_CONTROL": handle_serial_control,
     "LOG_ENTRY": handle_log_entry,
     "LOG_DATA": handle_log_data,
+    "MISSION_REQUEST": fence.handle_mission_request,
+    "MISSION_REQUEST_INT": fence.handle_mission_request,
+    "MISSION_ACK": fence.handle_mission_ack,
 }
 
 

@@ -2,31 +2,30 @@
 
 A terminal UI for a PX4 vehicle over MAVLink, in the spirit of
 [lazygit](https://github.com/jesseduffield/lazygit) and
-[lazydocker](https://github.com/jesseduffield/lazydocker), inspired by [mrs_uav_status](https://github.com/ctu-mrs/mrs_uav_status.git): one screen, a
-single keypress per view, sensible defaults, nothing to configure to get
-started.
+[lazydocker](https://github.com/jesseduffield/lazydocker), inspired by [mrs_uav_status](https://github.com/ctu-mrs/mrs_uav_status.git).
+
+QGroundControl is built for one operator, one vehicle, a mouse and a lot of
+screen space. `lazypx4` is for the other case: driving PX4 over SSH, from a
+companion computer, or across a fleet of vehicles at once, where spinning up
+a full GCS per UAV doesn't scale and every click and window switch costs
+time. There is nothing to click - every screen and every action is a single
+keypress, navigated vim-style (`j`/`k`, `Ctrl-D`/`Ctrl-U`, `/` search, ...),
+with sensible defaults and nothing to configure to get started. One screen,
+one keypress per view, a much faster and cleaner workflow than a mouse-driven
+GCS. Combined with a terminal multiplexer like [tmux](https://tmux.github.io)
+becames a powerfull tool for multi-UAV setup.
+
+It goes beyond MAVLink telemetry, too: the `[v]` LiDAR and `[w]` camera
+screens embed live ROS 2 visualization (`PointCloud2`, `Image`/
+`CompressedImage`) right next to the flight state, the dashboard's
+**HOST**/**SVC** lines and the `[u]` screen monitor the companion computer
+itself - CPU/RAM/disk load, whether rosbag/Zenoh/the uXRCE-DDS agent are up,
+USB device enumeration, Wi-Fi/Ethernet link. Vehicle state, sensor feeds and
+companion-computer health all on one screen make it a genuinely useful
+**preflight check**: arming/GPS/EKF status, camera/LiDAR feeds and companion-computer
+health, all glanceable before you take off.
 
 ![lazypx4 demo](docs/demo.gif)
-
-```
-╭─ PX4 UAV · COMMAND / TELEMETRY
-╰──────────────────────────────────────────────────────────────────────────────
- LINK: CONNECTED    SYS: 1    COMP: 1    LOCKED: YES
- MODE: HOLD
- STATE:  DISARMED
- HOST: CPU  34%   RAM  51% 2.1/4.0G   DISK 62% 14G free   load 0.82
- SVC:  rosbag ● REC    zenoh ● up    xrce-agent ● up
- FLIGHT: [a]arm [d]disarm [T]takeoff [L]land [R]RTL [h]hold [m]mode  (goto/jog on [n] map)
-
- POSITION / VELOCITY ─────────────────────────────────────────────────────────
-   X:     12.400   Y:     -3.100   Z:      4.200 m
-   VX:     0.010   VY:      0.000   VZ:      0.000 m/s
- ...
- SCREENS ────────────────────────────────────────────────────────────────────
-   [m] MODE   [s] CALIBRATE   [n] MAP (goto + jog)   [e] ESTIMATION   [c] CONTROL
-   [p] PARAMETERS   [g] EVENT LOG   [l] FLIGHT LOGS   [t] NSH   [f] FIRMWARE
-   [u] USB/NET   [v] LIDAR   [?] ABOUT   [q]/[ESC] EXIT
-```
 
 ## What it does
 
@@ -39,26 +38,29 @@ UDP link and gives you, from one keyboard-driven screen:
 | `T` / `L` / `R` | Takeoff / land / RTL | `NAV_TAKEOFF` (prompts for altitude) / `NAV_LAND` / `RETURN_TO_LAUNCH` |
 | `m` | Flight modes | legacy modes **and** PX4 v1.15+ Standard Modes (custom / PX4-ROS2 external) |
 | `h` | Hold | HOLD-family mode, or `DO_PAUSE_CONTINUE` |
+| `K` | Kill | `MAV_CMD_DO_FLIGHTTERMINATION` - force-stops motors immediately, even in flight; not the same as disarm |
+| `H` | Set home | `MAV_CMD_DO_SET_HOME` - marks the current position as home |
+| `G` | Geofence action | Sets the `GF_ACTION` parameter (`n`one/`w`arning/`h`old/`r`eturn/`t`erminate) - PX4 has no runtime enable/disable command (it answers `MAV_CMD_DO_FENCE_ENABLE` `UNSUPPORTED`), so this is PX4's real mechanism; breach shown on the dashboard from `FENCE_STATUS` |
 | `s` | Sensor calibration | gyro / accel / level / compass / baro, following PX4's `[cal]` prompts |
 | `p` | Parameters | browse, filter (`/`), edit, `ALL` / `CHANGED` view, reboot |
 | `e` | Estimation | EKF health, innovation test ratios, GPS, rangefinder, barometer, height reference |
-| `c` | Control | attitude / rate / position / velocity setpoints, guidance, RC sticks |
-| `r` | RC input | stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value, RSSI/LQ/failsafe |
+| `c` / `r` | Control / RC | attitude / rate / position / velocity setpoints, guidance; RC connection, RSSI/LQ/failsafe, stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value; wind estimate (`WIND_COV`); raw actuator outputs (`SERVO_OUTPUT_RAW`) |
 | `w` | Camera preview | up to two ROS 2 `sensor_msgs/Image`/`CompressedImage` topics shown at once - `1`/`2` set each slot's topic (blank clears it), `b` toggles a low-bandwidth ASCII-only render for slow links |
-| `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog; `i` saves a satellite snapshot |
+| `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, home marker, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog, `o` = load a `.kml` file's fence polygon + waypoints as a visualization overlay (view-only, never uploaded on its own) - each waypoint's local N/E and global lat/lon/alt are listed below the grid, `O` = upload the loaded fence polygon to the vehicle for real (MAVLink mission protocol, `mission_type=FENCE`) so PX4 actually enforces it, `i` saves a satellite snapshot (the loaded `.kml` overlay is drawn onto it too, if one is loaded) |
 | `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
 | `g` | Event log | scrolling INFO / WARN / ERROR / FAILSAFE / COMMAND feed |
 | `t` | MAVLink shell | PX4 NuttShell over `SERIAL_CONTROL`, like QGC's MAVLink Console |
 | `f` | Flash firmware | pick a `.px4` file and a serial port, flash via `px_uploader.py` |
 | `u` | USB / network | companion-computer sanity check: USB device enumeration, Wi-Fi/Ethernet link and IP - independent of the MAVLink link |
 | `v` | LiDAR point cloud | summary + scatter view of a ROS 2 `sensor_msgs/PointCloud2` topic (e.g. Livox `/livox/points`), in the sensor's own frame; `1`/`2`/`3` switch top-down / front / oblique projection, `c` toggles a freely-rotatable camera panned/tilted with `hjkl`, `t` changes the subscribed topic |
-| `?` | About | logo, author/contact, sponsor link, version |
+| `?` | About | logo, author/contact, version |
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
-change, parameter set, reboot, calibration, goto, arming jog) goes through a
-`type YES` confirmation shown as a bar across the bottom of the screen.
-`lazypx4` never force-arms - takeoff, goto and jog all require you to have
-armed with `a` first, plus a GPS/global position.
+change, parameter set, reboot, calibration, goto, arming jog, kill, set home,
+geofence action, geofence upload) goes through a `type YES` confirmation shown as a
+bar across the bottom of the screen. `lazypx4` never force-arms - takeoff,
+goto and jog all require you to have armed with `a` first, plus a
+GPS/global position.
 
 Vim navigation (`j`/`k`, `Ctrl-D`/`Ctrl-U`, ...) works on every browse screen.
 
@@ -69,12 +71,23 @@ never narrowed.
 
 On the **Map screen** (`n`):
 
-**Goto** — `g` sends the vehicle to a body-frame relative point: type
-`forward right down [yaw]` in metres/degrees (e.g. `10 0 0` = 10 m straight
-ahead, same height; `10 0 -2` = 10 m ahead and 2 m up). Sent as
-`MAV_CMD_DO_REPOSITION` from the current position with the target altitude as
-AMSL, so `down 0` never changes height. Needs a GPS fix and an armed vehicle;
-shows the target before the `type YES`.
+**Flight commands** — every dashboard flight command also works here (while
+jog isn't armed): `a`/`d` arm/disarm, `T`/`L`/`R` takeoff/land/RTL, `h` hold,
+`K` kill, `H` set home, `G` geofence action - same keys, same `type YES`
+confirmations. Jog owns `a`/`d`/`h`/etc. instead whenever it's armed (`x`).
+
+**Goto** — `g` sends the vehicle to a target in one of three frames, chosen
+by an optional leading letter (default is relative, unchanged from before):
+
+| Frame | Syntax | Example | Meaning |
+|---|---|---|---|
+| relative *(default)* | `[r] forward right down [yaw]` | `10 0 -2` | body-frame offset from the current position/heading, metres/degrees |
+| local NED | `l N E D [yaw]` | `l 5 -3 -10` | absolute point in the local NED frame (same frame as this screen's grid/trail), origin-relative - needs a known local origin |
+| global | `g lat lon alt [yaw]` | `g 52.218650 6.886870 40` | a literal lat/lon and AMSL altitude |
+
+All three send `MAV_CMD_DO_REPOSITION` to an absolute lat/lon/AMSL target
+(altitude is always AMSL, so relative `down 0` never changes height). Needs
+an armed vehicle; shows the resolved target before the `type YES`.
 
 **Keyboard jog** — `x` arms jog (one `type YES`). While armed, each key sends
 one `DO_REPOSITION` step from the current position, immediately:
@@ -118,6 +131,39 @@ The `[w]` camera screen's topics can publish `sensor_msgs/CompressedImage`
 instead of raw `Image`; decoding those additionally needs Pillow (the
 `[map]` extra above).
 
+### Standalone binary
+
+As an alternative to `pip install`, `./build_binary.sh` builds a
+standalone, single-file `lazypx4` executable with PyInstaller - it bundles
+Python and every pip dependency, so it runs without activating `.venv` or
+having Python installed system-wide - and symlinks it into
+`~/.local/bin/lazypx4` so it's on `PATH`.
+
+check install/install.sh folder for the whole procedure.
+
+### `Tools/`
+
+`[f]` flash firmware, the flight-logs screen's `[u]` web upload and `[a]`
+EKF health-check all shell out to real, standalone PX4 scripts rather than
+reimplementing them - `px_uploader.py`, `upload_log.py` and
+`ecl_ekf/process_logdata_ekf.py` (plus the `ecl_ekf/analysis` and
+`ecl_ekf/plotting` modules it imports). `lazypx4` looks for them under a
+`Tools/` directory (`--tools-dir`, default `./Tools`), and this repo checks
+in `Tools` as a vendored copy of those scripts straight from
+[PX4-Autopilot](https://github.com/PX4/PX4-Autopilot) (BSD-3-Clause,
+license kept at `Tools/LICENSE`) - no sibling PX4-Autopilot checkout
+needed, they're used directly from this repo.
+
+To refresh them from a newer PX4-Autopilot release, copy the same files
+back in from a checkout of it (`Tools/px_uploader.py`, `Tools/upload_log.py`,
+`Tools/ecl_ekf/`) and commit the result, or point `--tools-dir` at a PX4-
+Autopilot checkout's `Tools/` directory instead of this repo's copy.
+Without a valid `Tools/`, every other screen and action still works -
+`[f]`/`[u]`/`[a]` just report the script as not found. Installing the
+`tools` extra above gets you these scripts' own runtime dependencies
+(pyserial, requests, pyulog, ...); it does not fetch the scripts
+themselves.
+
 ## Run
 
 ```bash
@@ -128,6 +174,7 @@ lazypx4 --disk-path /data      # which filesystem the HOST block reports
 lazypx4 --firmware-dir ~/px4/build  # where [f] looks for .px4 files
 lazypx4 --lidar-topic /livox/points # ROS 2 topic for the [v] screen
 lazypx4 --camera-topic /camera/image_raw --camera-topic-2 /camera2/image_raw # [w] screen topics
+lazypx4 --kml mission.kml       # preload the [n] map screen's fence/waypoint overlay
 lazypx4 --help
 ```
 
@@ -154,50 +201,16 @@ mavlink start -u 14560 -o 14560 -m normal -r 4000000
 > `normal`-mode instance (`lazypx4` also re-requests `STATUSTEXT` / `EVENT`
 > on start and on `[r]`).
 
-## Layout
+## Status
 
-```
-lazypx4/
-├── config.py       constants, lookup tables, runtime Settings
-├── util.py         safe_int / safe_float / clamp / finite
-├── ansi.py         escape codes, terminal cursor, screen chrome
-├── models.py       LogEvent, PendingArm, CustomMode, FlightLogEntry, Parameter
-├── state.py        State (vehicle) + Session (UI) singletons, queues
-├── eventlog.py     the in-memory event log + STATUSTEXT classification
-├── search.py       the "/" incremental search shared by the list screens
-├── sysmon.py       host CPU / RAM / disk + rosbag / zenoh / xrce-agent checks
-├── netmon.py       host USB devices + Wi-Fi/Ethernet/IP checks (the [u] screen)
-├── rosclock.py     optional rclpy node mirroring ROS 2 "now" for the dashboard
-├── lidar.py        optional rclpy node summarizing a PointCloud2 topic ([v] screen)
-├── jobs.py         generic background-subprocess runner (flash / upload / EKF check)
-├── pxtools.py      wraps the standalone PX4 scripts under Tools/ as jobs
-├── terminal.py     raw-mode setup + the keyboard reader thread
-├── navigation.py   key -> action controller, screen switching, confirmations
-├── satellite.py    satellite-image snapshot (background thread)
-├── app.py          connect, start threads, run the render/poll loop
-├── mavlink/
-│   ├── connection.py    connect, GCS heartbeat, stream setup, vehicle_ready
-│   ├── receiver.py      the background MAVLink receiver + dispatch table
-│   ├── handlers.py      per-message telemetry handlers
-│   ├── commands.py      arm/disarm, set_mode, hold, reboot
-│   ├── guided.py        takeoff / land / RTL / "goto" / jog (MAV_CMD_DO_REPOSITION)
-│   ├── modes.py         Standard Modes Protocol (AVAILABLE_MODES / CURRENT_MODE)
-│   ├── parameters.py    PX4 parameter protocol
-│   ├── calibration.py   MAV_CMD_PREFLIGHT_CALIBRATION
-│   ├── flightlog.py     ULog listing + fast queue-based downloader
-│   └── shell.py         NSH console over SERIAL_CONTROL
-└── render/
-    ├── chrome.py     frame painting + colour/label helpers
-    ├── jobpanel.py   shared "background job" status block (flash/upload/EKF)
-    └── *.py          one module per screen (dashboard, about, host, firmware,
-                       pointcloud, mode_select, control, estimation, calibration,
-                       eventlog_screen, flightlog, parameters, shell, ...)
-```
+`lazypx4` is under active testing - if you hit a bug or have an idea for an
+improvement, please [open an issue](https://github.com/manuelboldrer/lazypx4/issues)
+or send a PR. Thanks!
 
 ## Author
 
-Manuel Boldrer - manuel.boldrer@gmail.com
-Saxion University of Applied Sciences, Smart Mechatronics and Robotics Group.
+[Manuel Boldrer](https://manuelboldrer.github.io/) - manuel.boldrer@gmail.com
+Saxion University of Applied Sciences, [Smart Mechatronics and Robotics Group](https://www.saxion.edu/research/research-groups/smart-mechatronics-and-robotics).
 
 (Also shown in-app on the `?` About screen, along with the running version.)
 

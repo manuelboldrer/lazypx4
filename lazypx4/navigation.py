@@ -16,6 +16,8 @@ from . import camera as camera_mod
 from . import search
 from .config import (
     FLIGHT_LOG_PAGE_SIZE,
+    GF_ACTION_LETTERS,
+    GF_ACTION_NAMES,
     JOG_MIN_INTERVAL,
     JOG_STEP_M,
     JOG_STEP_MAX_M,
@@ -28,10 +30,31 @@ from .config import (
 )
 from .eventlog import log_command, log_error, log_info, log_warn
 from .jobs import cancel_job, job_running
+from .kml import parse_kml
 from .mavlink.calibration import cancel_calibration, send_calibration
-from .mavlink.commands import send_arm, send_hold, send_reboot
-from .mavlink.connection import configure_streams, request_estimator_params, vehicle_ready
-from .mavlink.guided import send_goto_body, send_land, send_rtl, send_takeoff
+from .mavlink.commands import (
+    send_arm,
+    send_hold,
+    send_kill,
+    send_reboot,
+    send_set_home_current,
+)
+from .mavlink.connection import (
+    configure_streams,
+    get_param_value,
+    request_estimator_params,
+    request_single_param,
+    vehicle_ready,
+)
+from .mavlink.guided import (
+    send_goto_body,
+    send_goto_global,
+    send_goto_local,
+    send_land,
+    send_rtl,
+    send_takeoff,
+)
+from .mavlink.fence import start_fence_upload
 from .mavlink.flightlog import (
     cancel_flight_log_download,
     request_flight_logs,
@@ -122,6 +145,31 @@ def confirm_hold():
 
 def confirm_reboot():
     send_reboot(session.link)
+
+
+def confirm_kill():
+    send_kill(session.link)
+
+
+def confirm_set_home():
+    send_set_home_current(session.link)
+
+
+def confirm_ekf_reset():
+    with state.lock:
+        already_active = state.shell_active
+
+    if not already_active:
+        if claim_shell(session.link):
+            with state.lock:
+                state.shell_active = True
+        else:
+            log_error("Could not open MAVLink shell for EKF reset")
+            return
+
+    send_shell_raw(session.link, b"ekf stop\n")
+    send_shell_raw(session.link, b"ekf start\n")
+    log_command("EKF reset: ekf stop / ekf start")
 
 
 # ---------------------------------------------------------------------------
@@ -248,52 +296,141 @@ def _takeoff_submit(text):
 
 
 # ---------------------------------------------------------------------------
-# Goto - forward/right/down offset from the current position (map screen)
+# Geofence action (GF_ACTION parameter)
+#
+# PX4 has no runtime enable/disable command - it doesn't implement
+# MAV_CMD_DO_FENCE_ENABLE at all (confirmed: PX4 answers it UNSUPPORTED).
+# What a configured fence actually does on breach - including doing nothing,
+# the closest PX4 equivalent to "disabled" - is entirely the GF_ACTION
+# parameter, so that's what this drives instead.
 # ---------------------------------------------------------------------------
+
+_GF_ACTION_PROMPT = (
+    "Geofence action - n=none(disabled) w=warning h=hold r=return t=terminate:"
+)
+
+
+def open_fence_input():
+    current = get_param_value("GF_ACTION")
+
+    if current is None:
+        request_single_param(session.link, "GF_ACTION")
+        log_warn("Reading GF_ACTION from PX4 - press [G] again in a moment")
+        return
+
+    current_name = GF_ACTION_NAMES.get(int(round(current)), str(current))
+    request_input(
+        f"{_GF_ACTION_PROMPT}  (current: {current_name})",
+        _fence_submit,
+    )
+
+
+def _fence_submit(text):
+    choice = text.strip().lower()
+    action = GF_ACTION_LETTERS.get(choice)
+
+    if action is None:
+        log_error("Geofence: type one of n/w/h/r/t")
+        return
+
+    label = GF_ACTION_NAMES[action]
+    request_confirmation(
+        f"Set geofence action to {label} (GF_ACTION={action})? Type YES",
+        lambda: confirm_parameter_set("GF_ACTION", float(action)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Goto - relative (default), local NED, or global (map screen)
+# ---------------------------------------------------------------------------
+
+# Leading token -> frame. "r"/"rel"/"relative" match the historical no-prefix
+# behaviour explicitly too, so old muscle memory ("10 0 -2") keeps working
+# with no prefix at all - only "l"/"local" and "g"/"global" opt into the
+# other two.
+_GOTO_FRAME_WORDS = {
+    "r": "relative", "rel": "relative", "relative": "relative",
+    "l": "local", "local": "local",
+    "g": "global", "global": "global",
+}
 
 
 def open_goto_input():
     with state.lock:
-        have_global = state.global_pos_valid
         armed = state.armed
 
-    if not have_global:
-        log_warn("Goto needs a GPS / global position")
-        return
     if not armed:
         log_warn("Goto: vehicle is not armed")
 
     request_input(
-        "Goto  forward right down [yaw]   metres, deg   e.g.  10 0 -2",
+        "Goto: [r] fwd right down [yaw] (default)  |  [l] N E D [yaw]  |"
+        "  [g] lat lon alt [yaw]   e.g.  10 0 -2   or   l 5 -3 -10   or"
+        "   g 52.218650 6.886870 40",
         _goto_submit,
     )
 
 
 def _goto_submit(text):
-    parts = text.replace(",", " ").split()
+    tokens = text.replace(",", " ").split()
+
+    if not tokens:
+        log_error("Goto: expected numbers - see the prompt for the syntax")
+        return
+
+    frame = "relative"
+    first = tokens[0].lower()
+    if first in _GOTO_FRAME_WORDS:
+        frame = _GOTO_FRAME_WORDS[first]
+        tokens = tokens[1:]
 
     try:
-        nums = [float(p) for p in parts]
+        nums = [float(t) for t in tokens]
     except ValueError:
-        log_error("Goto: expected numbers 'forward right down [yaw]'")
+        log_error("Goto: expected numbers after the optional frame letter")
         return
 
     if len(nums) < 3:
-        log_error("Goto: need forward right down (metres)")
+        log_error("Goto: need three numbers (plus an optional yaw)")
         return
 
-    forward, right, down = nums[0], nums[1], nums[2]
     yaw = nums[3] if len(nums) >= 4 else None
 
-    horizontal = math.hypot(forward, right)
+    if frame == "relative":
+        forward, right, down = nums[0], nums[1], nums[2]
+        horizontal = math.hypot(forward, right)
+        prompt = (
+            f"GOTO [relative]  fwd {forward:+.1f}  right {right:+.1f}  down {down:+.1f} m"
+            + (f"  yaw {yaw:.0f}" if yaw is not None else "")
+            + f"   ({horizontal:.1f} m horizontal). Type YES"
+        )
+        request_confirmation(
+            prompt,
+            lambda: send_goto_body(session.link, forward, right, down, yaw),
+        )
+        return
+
+    if frame == "local":
+        north, east, down = nums[0], nums[1], nums[2]
+        prompt = (
+            f"GOTO [local NED]  N {north:+.1f}  E {east:+.1f}  D {down:+.1f} m"
+            + (f"  yaw {yaw:.0f}" if yaw is not None else "")
+            + "   (absolute, from the local origin). Type YES"
+        )
+        request_confirmation(
+            prompt,
+            lambda: send_goto_local(session.link, north, east, down, yaw),
+        )
+        return
+
+    lat, lon, alt = nums[0], nums[1], nums[2]
     prompt = (
-        f"GOTO  fwd {forward:+.1f}  right {right:+.1f}  down {down:+.1f} m"
+        f"GOTO [global]  {lat:.7f}, {lon:.7f} @ {alt:.1f} m MSL"
         + (f"  yaw {yaw:.0f}" if yaw is not None else "")
-        + f"   ({horizontal:.1f} m horizontal). Type YES"
+        + ". Type YES"
     )
     request_confirmation(
         prompt,
-        lambda: send_goto_body(session.link, forward, right, down, yaw),
+        lambda: send_goto_global(session.link, lat, lon, alt, yaw),
     )
 
 
@@ -602,30 +739,6 @@ def handle_control_key(key):
 
 
 # ---------------------------------------------------------------------------
-# RC input screen (stick positions + raw channels)
-# ---------------------------------------------------------------------------
-
-
-def open_rc_screen():
-    session.screen = "rc"
-
-    if session.link is not None:
-        configure_streams(session.link)
-
-
-def handle_rc_key(key):
-    if key == "r":
-        session.screen = "dashboard"
-        return
-
-    if key == "ESC":
-        _focus_sidebar()
-        return
-
-    _scroll_main(key)
-
-
-# ---------------------------------------------------------------------------
 # ROS camera preview screen
 # ---------------------------------------------------------------------------
 
@@ -691,6 +804,86 @@ def open_map_screen():
         configure_streams(session.link)
 
 
+def open_kml_input():
+    request_input(
+        "KML file path (waypoints + fence overlay, visualization only):",
+        load_kml_file,
+    )
+
+
+def load_kml_file(text):
+    """Parse and load a .kml file as the map screen's overlay.
+
+    Shared by the [o] input prompt and ``--kml`` at start-up (see
+    :func:`lazypx4.app.run`).
+    """
+    path = os.path.expanduser(text.strip())
+
+    if not path:
+        return
+
+    try:
+        result = parse_kml(path)
+    except Exception as exc:
+        with state.lock:
+            state.kml_loaded = False
+            state.kml_error = str(exc)
+        log_error(f"KML load failed: {exc}")
+        return
+
+    with state.lock:
+        state.kml_path = path
+        state.kml_waypoints = result["waypoints"]
+        state.kml_fence_rings = result["fence_rings"]
+        state.kml_loaded = True
+        state.kml_error = ""
+
+    log_info(
+        f"KML loaded: {os.path.basename(path)} - "
+        f"{len(result['waypoints'])} waypoint(s), "
+        f"{len(result['fence_rings'])} fence ring(s)"
+    )
+
+
+def _fence_upload_vertex_count(fence_rings):
+    total = 0
+    for ring in fence_rings:
+        vertices = list(ring)
+        if len(vertices) >= 2 and vertices[0] == vertices[-1]:
+            vertices = vertices[:-1]
+        if len(vertices) >= 3:
+            total += len(vertices)
+    return total
+
+
+def open_fence_upload_confirm():
+    with state.lock:
+        kml_loaded = state.kml_loaded
+        fence_rings = [list(ring) for ring in state.kml_fence_rings]
+        upload_active = state.fence_upload_active
+
+    if upload_active:
+        log_warn("A geofence upload is already in progress")
+        return
+
+    if not kml_loaded or not fence_rings:
+        log_warn("Load a .kml with a fence polygon first ([o])")
+        return
+
+    vertex_total = _fence_upload_vertex_count(fence_rings)
+
+    if vertex_total == 0:
+        log_warn("Loaded .kml has no polygon with at least 3 vertices")
+        return
+
+    request_confirmation(
+        f"UPLOAD geofence to vehicle? {len(fence_rings)} ring(s), {vertex_total}"
+        " vertice(s). This REPLACES PX4's active fence and takes effect"
+        " immediately. Type YES",
+        lambda: start_fence_upload(session.link),
+    )
+
+
 def handle_map_key(key):
     if key == "n":
         session.jog_armed = False
@@ -713,12 +906,30 @@ def handle_map_key(key):
     if session.jog_armed and _jog_key(key):
         return
 
+    # j/k (and Ctrl-D/U/F/B) are jog's own keys while it's armed, so vim
+    # normalization is off for this screen (see process_key) - but once jog
+    # is disarmed they're free, so let them scroll like everywhere else,
+    # matching draw_frame's generic "jk to scroll" footer hint.
+    if not session.jog_armed:
+        key = normalize_vim_key(key)
+
+    if _scroll_main(key):
+        return
+
     if key == "i":
         start_satellite_download()
         return
 
     if key == "g":
         open_goto_input()
+        return
+
+    if key == "o":
+        open_kml_input()
+        return
+
+    if key == "O":
+        open_fence_upload_confirm()
         return
 
     if key in ("+", "="):
@@ -748,6 +959,14 @@ def handle_map_key(key):
 
     if key == "r":
         configure_streams(session.link)
+        return
+
+    # Flight commands (arm, disarm, takeoff, land, RTL, hold, EKF reset,
+    # kill, set home, geofence action) - same keys, same confirmations, as
+    # the dashboard. Only reached with jog disarmed (jog's own w/a/s/d/h/j/k/l
+    # already returned above when it's armed), so a/d/h here always mean
+    # arm/disarm/hold, never a jog nudge.
+    _handle_flight_command_key(key)
 
 
 # ---------------------------------------------------------------------------
@@ -1601,10 +1820,6 @@ def process_key(key):
         handle_control_key(key)
         return
 
-    if session.screen == "rc":
-        handle_rc_key(key)
-        return
-
     if session.screen == "camera":
         handle_camera_key(key)
         return
@@ -1644,7 +1859,7 @@ _SCREEN_OPENERS = {
     "t": open_shell_screen,
     "e": open_estimation_screen,
     "c": open_control_screen,
-    "r": open_rc_screen,
+    "r": open_control_screen,
     "w": open_camera_screen,
     "n": open_map_screen,
     "s": open_calibration_screen,
@@ -1653,6 +1868,99 @@ _SCREEN_OPENERS = {
     "v": open_pointcloud_screen,
     "?": open_about_screen,
 }
+
+
+def _handle_flight_command_key(key):
+    """Arm/disarm/takeoff/land/RTL/hold/EKF-reset/kill/set-home/geofence -
+    every flight command the dashboard exposes, factored out so the map
+    screen can offer them too without duplicating each one. Returns True if
+    ``key`` was one of these and was consumed.
+
+    Safe to share as-is: the only letters that also mean something on the
+    map screen are the lowercase jog keys (a/d/h, among others), and jog
+    already consumes those itself - before this is ever reached - whenever
+    it's actually armed (see ``handle_map_key``). Every action below also
+    still goes through its own ``type YES`` confirmation, exactly as it does
+    from the dashboard.
+    """
+    if key == "a":
+        with state.lock:
+            if state.pending_arm is not None:
+                log_warn("ARM/DISARM command already pending")
+                return True
+            if state.armed:
+                log_warn("ARM ignored: vehicle already ARMED")
+                return True
+        request_confirmation("ARM vehicle? Type YES", confirm_arm)
+        return True
+
+    if key == "d":
+        with state.lock:
+            if state.pending_arm is not None:
+                log_warn("ARM/DISARM command already pending")
+                return True
+            if not state.armed:
+                log_warn("DISARM ignored: vehicle already DISARMED")
+                return True
+        request_confirmation("DISARM vehicle? Type YES", confirm_disarm)
+        return True
+
+    if key == "h":
+        request_confirmation("HOLD vehicle? Type YES", confirm_hold)
+        return True
+
+    if key == "T":
+        open_takeoff_input()
+        return True
+
+    if key == "L":
+        request_confirmation(
+            "LAND here? Type YES",
+            lambda: send_land(session.link),
+        )
+        return True
+
+    if key == "R":
+        request_confirmation(
+            "RETURN TO LAUNCH? Type YES",
+            lambda: send_rtl(session.link),
+        )
+        return True
+
+    if key == "E":
+        request_confirmation(
+            "RESET EKF (ekf stop / ekf start)? Type YES",
+            confirm_ekf_reset,
+        )
+        return True
+
+    if key == "K":
+        request_confirmation(
+            "KILL motors NOW? This force-stops motors immediately, even in"
+            " flight - NOT the same as disarm. Type YES",
+            confirm_kill,
+        )
+        return True
+
+    if key == "H":
+        with state.lock:
+            have_global = state.global_pos_valid
+
+        if not have_global:
+            log_warn("Set home needs a GPS / global position")
+            return True
+
+        request_confirmation(
+            "Set HOME to current position? Type YES",
+            confirm_set_home,
+        )
+        return True
+
+    if key == "G":
+        open_fence_input()
+        return True
+
+    return False
 
 
 def _handle_dashboard_key(key):
@@ -1664,48 +1972,7 @@ def _handle_dashboard_key(key):
     if _scroll_main(key):
         return
 
-    if key == "a":
-        with state.lock:
-            if state.pending_arm is not None:
-                log_warn("ARM/DISARM command already pending")
-                return
-            if state.armed:
-                log_warn("ARM ignored: vehicle already ARMED")
-                return
-        request_confirmation("ARM vehicle? Type YES", confirm_arm)
-        return
-
-    if key == "d":
-        with state.lock:
-            if state.pending_arm is not None:
-                log_warn("ARM/DISARM command already pending")
-                return
-            if not state.armed:
-                log_warn("DISARM ignored: vehicle already DISARMED")
-                return
-        request_confirmation("DISARM vehicle? Type YES", confirm_disarm)
-        return
-
-    if key == "h":
-        request_confirmation("HOLD vehicle? Type YES", confirm_hold)
-        return
-
-    if key == "T":
-        open_takeoff_input()
-        return
-
-    if key == "L":
-        request_confirmation(
-            "LAND here? Type YES",
-            lambda: send_land(session.link),
-        )
-        return
-
-    if key == "R":
-        request_confirmation(
-            "RETURN TO LAUNCH? Type YES",
-            lambda: send_rtl(session.link),
-        )
+    if _handle_flight_command_key(key):
         return
 
     if key == "ESC":

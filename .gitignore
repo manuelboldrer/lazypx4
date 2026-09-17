@@ -23,5 +23,8 @@ venv/
 px4_logs/
 px4_maps/
 
+# tests
+tests/
+
 # PyInstaller
 *.spec

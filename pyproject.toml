@@ -53,10 +53,9 @@ tools = ["pyserial>=3.5", "requests>=2.31", "six>=1.16", "pyulog>=1.0", "numpy>=
 # "'speedtest' not found".
 net = ["speedtest-cli>=2.1"]
 
-# Fill in once the repo is pushed:
-# [project.urls]
-# Homepage = "https://github.com/OWNER/lazypx4"
-# Issues = "https://github.com/OWNER/lazypx4/issues"
+[project.urls]
+Homepage = "https://github.com/manuelboldrer/lazypx4"
+Issues = "https://github.com/manuelboldrer/lazypx4/issues"
 
 [project.scripts]
 lazypx4 = "lazypx4.cli:main"

@@ -84,6 +84,26 @@ class State:
     map_range: float = 30.0
     map_trail_enabled: bool = True
 
+    # KML overlay ([o] on the map screen) - a local visualization aid only,
+    # never uploaded to the vehicle. See lazypx4.kml.
+    kml_path: str = ""
+    kml_loaded: bool = False
+    kml_error: str = ""
+    kml_waypoints: list = field(default_factory=list)
+    kml_fence_rings: list = field(default_factory=list)
+
+    # Geofence upload to the vehicle ([O] on the map screen) - MAVLink
+    # mission protocol, mission_type=FENCE. See lazypx4.mavlink.fence. This
+    # is what actually makes PX4 enforce the loaded KML polygon; loading it
+    # with [o] above never does this by itself.
+    fence_upload_active: bool = False
+    fence_upload_items: list = field(default_factory=list)
+    fence_upload_total: int = 0
+    fence_upload_acked_seq: int = -1
+    fence_upload_started_at: float = 0.0
+    fence_upload_status: str = "IDLE"
+    fence_upload_error: str = ""
+
     # Satellite-image snapshot download.
     map_download_active: bool = False
     map_download_status: str = "IDLE"
@@ -279,6 +299,25 @@ class State:
     clipping_1: int = 0
     clipping_2: int = 0
     last_vibration: float = 0.0
+
+    # Wind estimate (WIND_COV, or legacy WIND). Direction is where the wind is
+    # blowing FROM, degrees, the usual aviation convention.
+    wind_speed: float = 0.0
+    wind_direction: float = 0.0
+    wind_speed_z: float = 0.0
+    last_wind: float = 0.0
+
+    # Raw actuator / servo outputs (SERVO_OUTPUT_RAW) - PX4's equivalent of
+    # ``listener actuator_outputs``: commanded PWM/DShot per motor/servo.
+    servo_outputs: list = field(default_factory=lambda: [0] * 8)
+    last_servo_output: float = 0.0
+
+    # Geofence breach status (FENCE_STATUS). Not every PX4 build streams
+    # this - it stays at "never" (last_fence_status == 0) if so.
+    fence_breach_status: int = 0
+    fence_breach_count: int = 0
+    fence_breach_type: int = 0
+    last_fence_status: float = 0.0
 
     # Flashed firmware (AUTOPILOT_VERSION, requested once at connect).
     fw_version_text: str = ""

@@ -115,6 +115,48 @@ def send_hold(master):
         return False
 
 
+def send_kill(master):
+    """Force-terminate the flight NOW - cuts motors even mid-flight.
+
+    Distinct from :func:`send_arm`\\ (False): PX4 can refuse a plain disarm
+    in flight for safety, but MAV_CMD_DO_FLIGHTTERMINATION is the same
+    "kill switch" QGroundControl exposes and is not gated on being on the
+    ground. Only ever send this as a real emergency stop.
+    """
+    if not vehicle_ready(master):
+        return False
+
+    try:
+        master.mav.command_long_send(
+            master.target_system, master.target_component,
+            mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION,
+            0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        )
+        log_warn("KILL command SENT - flight termination")
+        return True
+    except Exception as exc:
+        log_error(f"Failed to send KILL: {exc}")
+        return False
+
+
+def send_set_home_current(master):
+    """Mark the vehicle's current position as home (MAV_CMD_DO_SET_HOME)."""
+    if not vehicle_ready(master):
+        return False
+
+    try:
+        master.mav.command_long_send(
+            master.target_system, master.target_component,
+            mavutil.mavlink.MAV_CMD_DO_SET_HOME,
+            0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        )
+        log_command("SET HOME command SENT: current position")
+        return True
+    except Exception as exc:
+        log_error(f"Failed to set home: {exc}")
+        return False
+
+
 def send_reboot(master):
     if not vehicle_ready(master):
         return False

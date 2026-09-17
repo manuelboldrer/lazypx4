@@ -6,14 +6,25 @@ append and the per-level counters.
 
 from __future__ import annotations
 
+import re
 import time
 
 from .models import LogEvent
 from .state import state
 
+# Every event-log line is emitted as a single, fixed-width terminal row (see
+# ansi.truncate_visible) - a raw control character surviving into it (a "\n"
+# or "\r" from a PX4 STATUSTEXT/exception message, a stray "\t", ...) moves
+# the real cursor instead of just occupying a column, which desyncs every
+# row painted after it for that frame: later rows land shifted and a box's
+# title can end up overwritten or pushed off screen. Collapse any run of
+# such characters to a single space so a log message can never do that.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
+
 
 def add_log(level, message):
-    event = LogEvent(timestamp=time.time(), level=level, message=str(message))
+    text = _CONTROL_CHARS_RE.sub(" ", str(message)).strip()
+    event = LogEvent(timestamp=time.time(), level=level, message=text)
     with state.lock:
         state.events.append(event)
         if level == "WARN":

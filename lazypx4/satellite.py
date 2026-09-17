@@ -1,9 +1,11 @@
 """Satellite-image snapshot for the position map ([n] -> [i]).
 
 Downloads a Web-Mercator tile from Esri "World Imagery" (no API key) covering
-the vehicle and its home point, annotates it with pins and a scale bar if
-Pillow is installed, and writes the image plus a JSON sidecar to
-``settings.map_dir``. Runs on a background thread; needs internet access.
+the vehicle and its home point (and, if one is loaded, the [o] KML overlay's
+fence/waypoints too), annotates it with pins, the fence boundary, waypoint
+markers and a scale bar if Pillow is installed, and writes the image plus a
+JSON sidecar to ``settings.map_dir``. Runs on a background thread; needs
+internet access.
 """
 
 from __future__ import annotations
@@ -60,6 +62,9 @@ def start_satellite_download():
         else:
             home_lat, home_lon = robot_lat, robot_lon
 
+        kml_waypoints = list(state.kml_waypoints) if state.kml_loaded else []
+        kml_fence_rings = [list(ring) for ring in state.kml_fence_rings] if state.kml_loaded else []
+
         state.map_download_active = True
         state.map_download_status = "STARTING"
         state.map_download_error = ""
@@ -68,20 +73,27 @@ def start_satellite_download():
 
     thread = threading.Thread(
         target=_satellite_download_worker,
-        args=(robot_lat, robot_lon, home_lat, home_lon),
+        args=(robot_lat, robot_lon, home_lat, home_lon, kml_waypoints, kml_fence_rings),
         daemon=True,
         name="SatelliteMap",
     )
     thread.start()
 
+    kml_note = ""
+    if kml_waypoints or kml_fence_rings:
+        kml_note = (
+            f" + KML overlay ({len(kml_waypoints)} waypoint(s), "
+            f"{len(kml_fence_rings)} fence ring(s))"
+        )
+
     log_command(
         f"Satellite image requested: robot {robot_lat:.6f},{robot_lon:.6f} "
-        f"home {home_lat:.6f},{home_lon:.6f}"
+        f"home {home_lat:.6f},{home_lon:.6f}" + kml_note
     )
     return True
 
 
-def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon):
+def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon, kml_waypoints, kml_fence_rings):
     import urllib.error
     import urllib.request
 
@@ -95,10 +107,24 @@ def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon):
         rx, ry = _web_mercator(robot_lat, robot_lon)
         hx, hy = _web_mercator(home_lat, home_lon)
 
-        cx = (rx + hx) / 2.0
-        cy = (ry + hy) / 2.0
+        # The frame must fit the KML overlay too, not just home/robot - same
+        # centre+span approach, generalized from two points to however many
+        # there are (with just home/robot, this reduces to exactly the old
+        # calculation).
+        points_xy = [(rx, ry), (hx, hy)]
+        for lat, lon, _alt, _name in kml_waypoints:
+            points_xy.append(_web_mercator(lat, lon))
+        for ring in kml_fence_rings:
+            for lat, lon in ring:
+                points_xy.append(_web_mercator(lat, lon))
 
-        span = max(abs(rx - hx), abs(ry - hy)) * MAP_IMAGE_PAD
+        xs = [p[0] for p in points_xy]
+        ys = [p[1] for p in points_xy]
+
+        cx = (min(xs) + max(xs)) / 2.0
+        cy = (min(ys) + max(ys)) / 2.0
+
+        span = max(max(xs) - min(xs), max(ys) - min(ys)) * MAP_IMAGE_PAD
         span = max(span, MAP_IMAGE_MIN_SPAN_M)
         half = span / 2.0
 
@@ -136,6 +162,15 @@ def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon):
         home_px = to_pixel(hx, hy)
         robot_px = to_pixel(rx, ry)
 
+        kml_waypoints_px = [
+            (to_pixel(*_web_mercator(lat, lon)), lat, lon, alt, name)
+            for lat, lon, alt, name in kml_waypoints
+        ]
+        kml_fence_rings_px = [
+            [to_pixel(*_web_mercator(lat, lon)) for lat, lon in ring]
+            for ring in kml_fence_rings
+        ]
+
         # Web-Mercator distances are inflated by 1/cos(latitude); undo that
         # for real-world ground distance and scale.
         mercator_scale = max(0.05, math.cos(math.radians((robot_lat + home_lat) / 2.0)))
@@ -171,6 +206,22 @@ def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon):
             draw.line([20, y_bar, 20 + bar_px, y_bar], fill=(255, 235, 0), width=4)
             draw.text((20, y_bar - 16), f"{bar_m:.0f} m", fill=(255, 235, 0))
 
+            fence_color = (255, 220, 0)
+            for ring_px in kml_fence_rings_px:
+                if len(ring_px) >= 2:
+                    draw.line(ring_px + [ring_px[0]], fill=fence_color, width=3)
+
+            waypoint_color = (230, 60, 220)
+            for i, (point, _lat, _lon, _alt, name) in enumerate(kml_waypoints_px, start=1):
+                wx, wy = point
+                wp_radius = 7
+                label = name or f"WP{i}"
+                draw.ellipse(
+                    [wx - wp_radius, wy - wp_radius, wx + wp_radius, wy + wp_radius],
+                    outline=waypoint_color, width=2,
+                )
+                draw.text((wx + wp_radius + 3, wy - wp_radius - 4), f"{i}:{label}", fill=waypoint_color)
+
             marker(home_px, (255, 70, 70), "HOME")
             marker(robot_px, (80, 170, 255), f"ROBOT  {distance_m:.0f} m")
 
@@ -203,6 +254,24 @@ def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon):
             },
         }
 
+        if kml_waypoints_px or kml_fence_rings_px:
+            sidecar["kml"] = {
+                "waypoints": [
+                    {
+                        "name": name,
+                        "lat": lat,
+                        "lon": lon,
+                        "alt": alt,
+                        "pixel": [round(point[0], 1), round(point[1], 1)],
+                    }
+                    for point, lat, lon, alt, name in kml_waypoints_px
+                ],
+                "fence_rings": [
+                    [[round(px, 1), round(py, 1)] for px, py in ring_px]
+                    for ring_px in kml_fence_rings_px
+                ],
+            }
+
         with open(base + ".json", "w", encoding="utf-8") as handle:
             json.dump(sidecar, handle, indent=2)
 
@@ -222,6 +291,8 @@ def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon):
 
     if status == "COMPLETE":
         note = "annotated" if final_path.endswith(".png") else ""
+        if kml_waypoints or kml_fence_rings:
+            note = (note + " + kml overlay").strip()
         log_info(f"Satellite image saved: {final_path} {note}".rstrip())
     else:
         log_error(f"Satellite image download failed: {error_text}")

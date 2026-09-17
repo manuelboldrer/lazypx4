@@ -30,7 +30,6 @@ from .mapview import draw_map_screen
 from .modeselect import draw_mode_select
 from .parameters import draw_parameter_screen
 from .pointcloud import draw_pointcloud_screen
-from .rc import draw_rc_screen
 from .shell import draw_shell_screen
 
 DRAW_FUNCTIONS = {
@@ -42,7 +41,6 @@ DRAW_FUNCTIONS = {
     "parameters": draw_parameter_screen,
     "estimation": draw_estimation_screen,
     "control": draw_control_screen,
-    "rc": draw_rc_screen,
     "camera": draw_camera_screen,
     "map": draw_map_screen,
     "calibration": draw_calibration_screen,

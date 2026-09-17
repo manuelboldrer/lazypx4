@@ -43,6 +43,9 @@ env -u PYTHONPATH pyinstaller --onefile -y -n lazypx4 \
     --paths . \
     pyinstaller_entry.py
 
+mkdir -p ~/.local/bin
+ln -sf "../../git/lazypx4/dist/lazypx4" ~/.local/bin/lazypx4
+
 echo
 echo "Built: $(pwd)/dist/lazypx4"
-echo "Copy it anywhere on your PATH, e.g.: cp dist/lazypx4 ~/.local/bin/"
+echo "Symlinked: ~/.local/bin/lazypx4 -> dist/lazypx4"
