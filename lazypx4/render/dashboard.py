@@ -198,6 +198,10 @@ def draw_dashboard():
         ekf_timeout_active = state.ekf_timeout_active
         rc_timeout_active = state.rc_timeout_active
 
+        fence_breach_status = state.fence_breach_status
+        fence_breach_count = state.fence_breach_count
+        last_fence_status = state.last_fence_status
+
         vx = state.vx
         vy = state.vy
         vz = state.vz
@@ -342,6 +346,11 @@ def draw_dashboard():
             " " + RED + BOLD + "ALERT: " + ", ".join(timed_out) + " TELEMETRY TIMEOUT" + RESET
         )
 
+    if fence_breach_status:
+        lines.append(
+            " " + RED + BOLD + f"ALERT: GEOFENCE BREACH (count {fence_breach_count})" + RESET
+        )
+
     lines.extend(_host_lines())
 
     lines.append(
@@ -350,6 +359,10 @@ def draw_dashboard():
         + BOLD + "[R]" + RESET + "RTL  " + BOLD + "[h]" + RESET + "hold  "
         + BOLD + "[m]" + RESET + "mode  " + BOLD + "[E]" + RESET + "EKF reset   "
         + DIM + "goto/jog on the [n] map" + RESET
+    )
+    lines.append(
+        " SAFETY: " + RED + BOLD + "[K]" + RESET + "kill  "
+        + BOLD + "[H]" + RESET + "set home  " + BOLD + "[G]" + RESET + "geofence"
     )
 
     speed_h = math.hypot(vx, vy)
@@ -512,11 +525,20 @@ def draw_dashboard():
     rssi_color = graded_color(rc_rssi, RC_SIGNAL_GOOD, RC_SIGNAL_OK) if rc_received else DIM
     lq_color = graded_color(rc_lq, RC_SIGNAL_GOOD, RC_SIGNAL_OK) if rc_received else DIM
 
+    if last_fence_status:
+        fence_text = (
+            RED + BOLD + f"BREACH ({fence_breach_count})" + RESET
+            if fence_breach_status else GREEN + "OK" + RESET
+        )
+    else:
+        fence_text = DIM + "n/a" + RESET
+
     lines.append(
         f"   EKF: {ekf_color}{ekf_verdict}{RESET}"
         f"   PosAcc H/V: {pos_h_color}{est_pos_horiz_accuracy:.2f}{RESET}"
         f"/{pos_v_color}{est_pos_vert_accuracy:.2f}{RESET} m"
         f"   Home: {home_text}"
+        f"   Fence: {fence_text}"
     )
     lines.append(
         f"   RC: {rc_conn_text}"

@@ -563,6 +563,67 @@ def handle_vibration(msg):
         state.clipping_2 = safe_int(getattr(msg, "clipping_2", 0))
 
 
+def handle_wind(msg):
+    """Legacy WIND message: direction/speed given directly (ArduPilot-style)."""
+    now = time.monotonic()
+
+    with state.lock:
+        state.last_rx = now
+        state.last_wind = now
+
+        state.wind_direction = safe_float(getattr(msg, "direction", 0)) % 360.0
+        state.wind_speed = safe_float(getattr(msg, "speed", 0))
+        state.wind_speed_z = safe_float(getattr(msg, "speed_z", 0))
+
+
+def handle_wind_cov(msg):
+    """WIND_COV: wind given as a NED velocity vector - what PX4 streams."""
+    now = time.monotonic()
+
+    wind_x = safe_float(getattr(msg, "wind_x", 0))
+    wind_y = safe_float(getattr(msg, "wind_y", 0))
+    wind_z = safe_float(getattr(msg, "wind_z", 0))
+
+    speed = math.hypot(wind_x, wind_y)
+    # wind_x/y point in the direction the wind is blowing TOWARDS; add 180 deg
+    # to report the heading it is blowing FROM, the usual aviation convention.
+    direction = (math.degrees(math.atan2(wind_y, wind_x)) + 180.0) % 360.0
+
+    with state.lock:
+        state.last_rx = now
+        state.last_wind = now
+
+        state.wind_speed = speed
+        state.wind_direction = direction
+        state.wind_speed_z = wind_z
+
+
+def handle_servo_output_raw(msg):
+    now = time.monotonic()
+
+    outputs = [
+        safe_int(getattr(msg, f"servo{i}_raw", 0))
+        for i in range(1, 9)
+    ]
+
+    with state.lock:
+        state.last_rx = now
+        state.last_servo_output = now
+        state.servo_outputs = outputs
+
+
+def handle_fence_status(msg):
+    now = time.monotonic()
+
+    with state.lock:
+        state.last_rx = now
+        state.last_fence_status = now
+
+        state.fence_breach_status = safe_int(getattr(msg, "breach_status", 0))
+        state.fence_breach_count = safe_int(getattr(msg, "breach_count", 0))
+        state.fence_breach_type = safe_int(getattr(msg, "breach_type", 0))
+
+
 def _decode_fw_version(flight_sw_version, flight_custom_version):
     major = (flight_sw_version >> 24) & 0xFF
     minor = (flight_sw_version >> 16) & 0xFF

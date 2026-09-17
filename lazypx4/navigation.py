@@ -29,7 +29,14 @@ from .config import (
 from .eventlog import log_command, log_error, log_info, log_warn
 from .jobs import cancel_job, job_running
 from .mavlink.calibration import cancel_calibration, send_calibration
-from .mavlink.commands import send_arm, send_hold, send_reboot
+from .mavlink.commands import (
+    send_arm,
+    send_fence_enable,
+    send_hold,
+    send_kill,
+    send_reboot,
+    send_set_home_current,
+)
 from .mavlink.connection import configure_streams, request_estimator_params, vehicle_ready
 from .mavlink.guided import send_goto_body, send_land, send_rtl, send_takeoff
 from .mavlink.flightlog import (
@@ -122,6 +129,14 @@ def confirm_hold():
 
 def confirm_reboot():
     send_reboot(session.link)
+
+
+def confirm_kill():
+    send_kill(session.link)
+
+
+def confirm_set_home():
+    send_set_home_current(session.link)
 
 
 def confirm_ekf_reset():
@@ -261,6 +276,35 @@ def _takeoff_submit(text):
     request_confirmation(
         f"TAKEOFF and climb to {altitude:.1f} m? Type YES",
         lambda: send_takeoff(session.link, altitude),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Geofence enable/disable
+# ---------------------------------------------------------------------------
+
+
+def open_fence_input():
+    request_input(
+        "Geofence: enable or disable (e/d)?",
+        _fence_submit,
+    )
+
+
+def _fence_submit(text):
+    choice = text.strip().lower()
+
+    if choice in ("e", "enable"):
+        enable = True
+    elif choice in ("d", "disable"):
+        enable = False
+    else:
+        log_error("Geofence: type 'e' to enable or 'd' to disable")
+        return
+
+    request_confirmation(
+        f"{'ENABLE' if enable else 'DISABLE'} geofence? Type YES",
+        lambda: send_fence_enable(session.link, enable),
     )
 
 
@@ -616,30 +660,6 @@ def handle_control_key(key):
     if key == "r":
         configure_streams(session.link)
         log_info("Re-requested control / setpoint streams")
-
-
-# ---------------------------------------------------------------------------
-# RC input screen (stick positions + raw channels)
-# ---------------------------------------------------------------------------
-
-
-def open_rc_screen():
-    session.screen = "rc"
-
-    if session.link is not None:
-        configure_streams(session.link)
-
-
-def handle_rc_key(key):
-    if key == "r":
-        session.screen = "dashboard"
-        return
-
-    if key == "ESC":
-        _focus_sidebar()
-        return
-
-    _scroll_main(key)
 
 
 # ---------------------------------------------------------------------------
@@ -1618,10 +1638,6 @@ def process_key(key):
         handle_control_key(key)
         return
 
-    if session.screen == "rc":
-        handle_rc_key(key)
-        return
-
     if session.screen == "camera":
         handle_camera_key(key)
         return
@@ -1661,7 +1677,7 @@ _SCREEN_OPENERS = {
     "t": open_shell_screen,
     "e": open_estimation_screen,
     "c": open_control_screen,
-    "r": open_rc_screen,
+    "r": open_control_screen,
     "w": open_camera_screen,
     "n": open_map_screen,
     "s": open_calibration_screen,
@@ -1730,6 +1746,32 @@ def _handle_dashboard_key(key):
             "RESET EKF (ekf stop / ekf start)? Type YES",
             confirm_ekf_reset,
         )
+        return
+
+    if key == "K":
+        request_confirmation(
+            "KILL motors NOW? This force-stops motors immediately, even in"
+            " flight - NOT the same as disarm. Type YES",
+            confirm_kill,
+        )
+        return
+
+    if key == "H":
+        with state.lock:
+            have_global = state.global_pos_valid
+
+        if not have_global:
+            log_warn("Set home needs a GPS / global position")
+            return
+
+        request_confirmation(
+            "Set HOME to current position? Type YES",
+            confirm_set_home,
+        )
+        return
+
+    if key == "G":
+        open_fence_input()
         return
 
     if key == "ESC":

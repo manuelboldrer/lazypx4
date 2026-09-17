@@ -38,11 +38,13 @@ UDP link and gives you, from one keyboard-driven screen:
 | `T` / `L` / `R` | Takeoff / land / RTL | `NAV_TAKEOFF` (prompts for altitude) / `NAV_LAND` / `RETURN_TO_LAUNCH` |
 | `m` | Flight modes | legacy modes **and** PX4 v1.15+ Standard Modes (custom / PX4-ROS2 external) |
 | `h` | Hold | HOLD-family mode, or `DO_PAUSE_CONTINUE` |
+| `K` | Kill | `MAV_CMD_DO_FLIGHTTERMINATION` - force-stops motors immediately, even in flight; not the same as disarm |
+| `H` | Set home | `MAV_CMD_DO_SET_HOME` - marks the current position as home |
+| `G` | Geofence | `MAV_CMD_DO_FENCE_ENABLE` - prompts for `e`(nable)/`d`(isable); breach shown on the dashboard from `FENCE_STATUS` |
 | `s` | Sensor calibration | gyro / accel / level / compass / baro, following PX4's `[cal]` prompts |
 | `p` | Parameters | browse, filter (`/`), edit, `ALL` / `CHANGED` view, reboot |
 | `e` | Estimation | EKF health, innovation test ratios, GPS, rangefinder, barometer, height reference |
-| `c` | Control | attitude / rate / position / velocity setpoints, guidance, RC sticks |
-| `r` | RC input | stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value, RSSI/LQ/failsafe |
+| `c` / `r` | Control / RC | attitude / rate / position / velocity setpoints, guidance; RC connection, RSSI/LQ/failsafe, stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value; wind estimate (`WIND_COV`); raw actuator outputs (`SERVO_OUTPUT_RAW`) |
 | `w` | Camera preview | up to two ROS 2 `sensor_msgs/Image`/`CompressedImage` topics shown at once - `1`/`2` set each slot's topic (blank clears it), `b` toggles a low-bandwidth ASCII-only render for slow links |
 | `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog; `i` saves a satellite snapshot |
 | `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
@@ -54,10 +56,11 @@ UDP link and gives you, from one keyboard-driven screen:
 | `?` | About | logo, author/contact, version |
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
-change, parameter set, reboot, calibration, goto, arming jog) goes through a
-`type YES` confirmation shown as a bar across the bottom of the screen.
-`lazypx4` never force-arms - takeoff, goto and jog all require you to have
-armed with `a` first, plus a GPS/global position.
+change, parameter set, reboot, calibration, goto, arming jog, kill, set home,
+geofence enable/disable) goes through a `type YES` confirmation shown as a
+bar across the bottom of the screen. `lazypx4` never force-arms - takeoff,
+goto and jog all require you to have armed with `a` first, plus a
+GPS/global position.
 
 Vim navigation (`j`/`k`, `Ctrl-D`/`Ctrl-U`, ...) works on every browse screen.
 

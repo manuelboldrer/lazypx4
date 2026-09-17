@@ -280,6 +280,25 @@ class State:
     clipping_2: int = 0
     last_vibration: float = 0.0
 
+    # Wind estimate (WIND_COV, or legacy WIND). Direction is where the wind is
+    # blowing FROM, degrees, the usual aviation convention.
+    wind_speed: float = 0.0
+    wind_direction: float = 0.0
+    wind_speed_z: float = 0.0
+    last_wind: float = 0.0
+
+    # Raw actuator / servo outputs (SERVO_OUTPUT_RAW) - PX4's equivalent of
+    # ``listener actuator_outputs``: commanded PWM/DShot per motor/servo.
+    servo_outputs: list = field(default_factory=lambda: [0] * 8)
+    last_servo_output: float = 0.0
+
+    # Geofence breach status (FENCE_STATUS). Not every PX4 build streams
+    # this - it stays at "never" (last_fence_status == 0) if so.
+    fence_breach_status: int = 0
+    fence_breach_count: int = 0
+    fence_breach_type: int = 0
+    last_fence_status: float = 0.0
+
     # Flashed firmware (AUTOPILOT_VERSION, requested once at connect).
     fw_version_text: str = ""
     fw_git_hash: str = ""
