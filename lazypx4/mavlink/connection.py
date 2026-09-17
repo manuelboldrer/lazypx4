@@ -99,6 +99,14 @@ def vehicle_ready(master):
     return True
 
 
+#: Delay between successive commands in configure_streams(). The ~20 commands
+#: it sends would otherwise go out back-to-back in a single tight loop, which
+#: can saturate a low-baud serial link between the flight controller and the
+#: companion computer - PX4's mavlink instance can back up badly enough on a
+#: congested link to stop emitting heartbeats, tripping HEARTBEAT_TIMEOUT.
+_CONFIGURE_STREAMS_PACING = 0.02
+
+
 def configure_streams(master):
     """Ask PX4 for faster estimation/sensor streams than the defaults."""
     if master is None:
@@ -117,6 +125,7 @@ def configure_streams(master):
             )
         except Exception:
             pass
+        time.sleep(_CONFIGURE_STREAMS_PACING)
 
     # GPS_GLOBAL_ORIGIN (49) and HOME_POSITION (242) are emitted on change
     # rather than streamed, and AUTOPILOT_VERSION (148) only on request -
@@ -134,6 +143,7 @@ def configure_streams(master):
             )
         except Exception:
             pass
+        time.sleep(_CONFIGURE_STREAMS_PACING)
 
     # Some PX4 MAVLink stream configs ("onboard" / minimal) do not include
     # STATUSTEXT (253) or EVENT (410), which hides calibration "[cal]" prompts
@@ -152,6 +162,7 @@ def configure_streams(master):
             )
         except Exception:
             pass
+        time.sleep(_CONFIGURE_STREAMS_PACING)
 
 
 _last_gcs_heartbeat = 0.0
