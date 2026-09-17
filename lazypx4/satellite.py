@@ -22,6 +22,7 @@ from .config import (
     MAP_IMAGE_MIN_SPAN_M,
     MAP_IMAGE_PAD,
     MAP_IMAGE_SIZE,
+    MAP_RANGE_MAX_M,
     settings,
 )
 from .eventlog import log_command, log_error, log_info, log_warn
@@ -110,13 +111,24 @@ def _satellite_download_worker(robot_lat, robot_lon, home_lat, home_lon, kml_way
         # The frame must fit the KML overlay too, not just home/robot - same
         # centre+span approach, generalized from two points to however many
         # there are (with just home/robot, this reduces to exactly the old
-        # calculation).
+        # calculation). A KML file can carry placemarks from more than one
+        # site (e.g. a shared Google Earth project); a waypoint or fence
+        # vertex tens or hundreds of km from home/robot would otherwise blow
+        # the span out so far the imagery zooms out past the point of being
+        # useful, so only fold in KML points within MAP_RANGE_MAX_M of the
+        # home/robot area.
+        ref_cx, ref_cy = (rx + hx) / 2.0, (ry + hy) / 2.0
+
         points_xy = [(rx, ry), (hx, hy)]
         for lat, lon, _alt, _name in kml_waypoints:
-            points_xy.append(_web_mercator(lat, lon))
+            px, py = _web_mercator(lat, lon)
+            if math.hypot(px - ref_cx, py - ref_cy) <= MAP_RANGE_MAX_M:
+                points_xy.append((px, py))
         for ring in kml_fence_rings:
             for lat, lon in ring:
-                points_xy.append(_web_mercator(lat, lon))
+                px, py = _web_mercator(lat, lon)
+                if math.hypot(px - ref_cx, py - ref_cy) <= MAP_RANGE_MAX_M:
+                    points_xy.append((px, py))
 
         xs = [p[0] for p in points_xy]
         ys = [p[1] for p in points_xy]

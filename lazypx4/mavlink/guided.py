@@ -48,7 +48,11 @@ def send_takeoff(master, altitude_m):
             return False
         lat = state.global_lat
         lon = state.global_lon
-        rel_alt = state.z
+        # Home-relative altitude, positive up (GLOBAL_POSITION_INT's
+        # relative_alt) - NOT state.z, which handle_local_position/odometry
+        # also write using NED's positive-DOWN sign, and whichever message
+        # arrived last wins.
+        rel_alt = state.relative_alt
 
     target_alt = rel_alt + max(0.0, float(altitude_m))
 

@@ -81,6 +81,13 @@ class State:
     global_alt: float = 0.0
     global_pos_valid: bool = False
 
+    # Altitude above the home/launch point, positive up (GLOBAL_POSITION_INT's
+    # relative_alt). Kept separate from ``z``, which handle_local_position and
+    # handle_odometry also overwrite using NED's positive-DOWN convention -
+    # reading ``z`` for "current height above home" is wrong whenever one of
+    # those fired last. See mavlink.guided.send_takeoff.
+    relative_alt: float = 0.0
+
     map_range: float = 30.0
     map_trail_enabled: bool = True
 

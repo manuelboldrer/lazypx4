@@ -20,7 +20,7 @@ import os
 import time
 
 from ..ansi import BG_RED, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
-from ..config import JOG_YAW_STEP_DEG
+from ..config import JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M
 from ..state import session, state
 from ..util import clamp, finite, safe_float
 from .chrome import (
@@ -316,12 +316,20 @@ def draw_map_screen():
         effective_range = max(
             effective_range, abs(gps_local[0]) * 1.08, abs(gps_local[1]) * 1.08
         )
+    # A loaded KML can carry placemarks from more than one site (e.g. a
+    # shared Google Earth project accumulating unrelated test locations). One
+    # placemark tens or hundreds of km away would otherwise force
+    # effective_range out to match it, collapsing the geometry that's
+    # actually near the vehicle down to a handful of pixels - so only let
+    # KML content within the same span the manual zoom itself allows count
+    # towards the auto-fit range.
     for _lat, _lon, _alt, _name, local_ne in kml_waypoints_detail:
-        if local_ne is not None:
+        if local_ne is not None and abs(local_ne[0]) <= MAP_RANGE_MAX_M and abs(local_ne[1]) <= MAP_RANGE_MAX_M:
             effective_range = max(effective_range, abs(local_ne[0]) * 1.08, abs(local_ne[1]) * 1.08)
     for ring_local in kml_fence_rings_local:
         for rn, re_ in ring_local:
-            effective_range = max(effective_range, abs(rn) * 1.08, abs(re_) * 1.08)
+            if abs(rn) <= MAP_RANGE_MAX_M and abs(re_) <= MAP_RANGE_MAX_M:
+                effective_range = max(effective_range, abs(rn) * 1.08, abs(re_) * 1.08)
     effective_range = max(effective_range, 2.0)
 
     grid = [[" "] * grid_w for _ in range(grid_h)]

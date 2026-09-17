@@ -316,6 +316,21 @@ CAMERA_LOW_BW_MAX_COLS = 48
 
 
 # ---------------------------------------------------------------------------
+# Position map ([n]) - manual zoom cap, also used to bound how far a loaded
+# KML file's geometry can push the view.
+# ---------------------------------------------------------------------------
+#
+# A KML export can accumulate placemarks from more than one site (e.g. a
+# shared Google Earth project). Letting a fence/waypoint tens or hundreds of
+# km away count towards the auto-fit view would blow the scale out so far
+# that the geometry actually near the vehicle collapses to a few pixels -
+# capping KML's contribution at the same distance the manual zoom already
+# tops out at keeps that far-away, irrelevant geometry from wrecking the
+# view of what's nearby.
+MAP_RANGE_MAX_M = 5000.0
+
+
+# ---------------------------------------------------------------------------
 # Satellite-image snapshots (position map -> [i])
 # ---------------------------------------------------------------------------
 #

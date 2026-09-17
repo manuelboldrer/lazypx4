@@ -24,6 +24,7 @@ from .config import (
     JOG_STEP_MIN_M,
     JOG_YAW_STEP_DEG,
     LIDAR_CAM_ROTATE_STEP,
+    MAP_RANGE_MAX_M,
     MODE_PAGE_SIZE,
     PARAM_PAGE_SIZE,
     settings,
@@ -934,12 +935,12 @@ def handle_map_key(key):
 
     if key in ("+", "="):
         with state.lock:
-            state.map_range = clamp(state.map_range / 1.5, 2.0, 5000.0)
+            state.map_range = clamp(state.map_range / 1.5, 2.0, MAP_RANGE_MAX_M)
         return
 
     if key in ("-", "_"):
         with state.lock:
-            state.map_range = clamp(state.map_range * 1.5, 2.0, 5000.0)
+            state.map_range = clamp(state.map_range * 1.5, 2.0, MAP_RANGE_MAX_M)
         return
 
     if key == "0":
