@@ -69,6 +69,11 @@ def _build_parser():
         help="a second ROS 2 image topic for the [w] camera screen, shown "
              "alongside the first (default: unset)",
     )
+    parser.add_argument(
+        "--kml", default=None, metavar="FILE",
+        help="load a .kml file as the [n] map screen's fence/waypoint "
+             "overlay on start-up, same as pressing [o] (default: unset)",
+    )
     return parser
 
 
@@ -86,6 +91,7 @@ def main(argv=None):
     settings.lidar_topic = args.lidar_topic
     settings.camera_topic_1 = args.camera_topic
     settings.camera_topic_2 = args.camera_topic_2
+    settings.kml_path = args.kml
 
     if not sys.stdin.isatty():
         print("lazypx4 needs an interactive terminal to run.", file=sys.stderr)

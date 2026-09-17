@@ -208,6 +208,24 @@ def request_estimator_params(master):
             pass
 
 
+def request_single_param(master, name):
+    """Read one named parameter (PARAM_REQUEST_READ), e.g. before a PARAM_SET
+    that needs to know its wire type first - see :func:`get_param_value` and
+    ``mavlink.parameters.send_parameter_set``."""
+    if master is None:
+        return
+
+    try:
+        master.mav.param_request_read_send(
+            master.target_system,
+            master.target_component,
+            name.encode("utf-8")[:16].ljust(16, b"\x00"),
+            -1,
+        )
+    except Exception:
+        pass
+
+
 def get_param_value(name):
     """Return a received parameter's finite numeric value, or ``None``."""
     with state.lock:

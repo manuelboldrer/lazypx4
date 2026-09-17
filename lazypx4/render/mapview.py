@@ -5,14 +5,21 @@ the EKF local solution (``LOCAL_POSITION_NED`` / ``ODOMETRY``), and a cyan
 ``⊕`` is the raw GNSS fix (``GLOBAL_POSITION_INT``) projected into the same
 local frame through ``GPS_GLOBAL_ORIGIN``. Watching the two converge - and the
 ``EKF↔GNSS`` offset shrink - is the quickest read on an RTK bring-up.
+
+``[o]`` loads a local .kml file (see :mod:`lazypx4.kml`) as a visualization
+overlay: its ``Polygon`` rings are drawn as a dotted yellow boundary and its
+``Point``/``LineString`` waypoints as numbered magenta markers, both
+projected into the same local frame. This is read-only - nothing loaded this
+way is ever uploaded to the vehicle.
 """
 
 from __future__ import annotations
 
 import math
+import os
 import time
 
-from ..ansi import BG_RED, BOLD, CYAN, DIM, GREEN, RED, RESET, WHITE, YELLOW
+from ..ansi import BG_RED, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
 from ..config import JOG_YAW_STEP_DEG
 from ..state import session, state
 from ..util import clamp, finite, safe_float
@@ -64,6 +71,18 @@ def draw_map_screen():
         home_lat = state.home_lat
         home_lon = state.home_lon
 
+        kml_path = state.kml_path
+        kml_loaded = state.kml_loaded
+        kml_error = state.kml_error
+        kml_waypoints = list(state.kml_waypoints)
+        kml_fence_rings = [list(ring) for ring in state.kml_fence_rings]
+
+        fence_upload_active = state.fence_upload_active
+        fence_upload_status = state.fence_upload_status
+        fence_upload_error = state.fence_upload_error
+        fence_upload_total = state.fence_upload_total
+        fence_upload_acked_seq = state.fence_upload_acked_seq
+
         global_valid = state.global_pos_valid
         glat = state.global_lat
         glon = state.global_lon
@@ -111,6 +130,34 @@ def draw_map_screen():
             gps_local = (gn, ge)
             if valid:
                 gps_offset = (gn - lx, ge - ly)
+
+    home_local = None
+    if home_set and origin_set:
+        hn, he = global_to_local(home_lat, home_lon, origin_lat, origin_lon)
+        if math.isfinite(hn) and math.isfinite(he):
+            home_local = (hn, he)
+
+    # (lat, lon, alt, name, local_(n,e)_or_None) - one entry per KML waypoint
+    # in document order, so its index always matches the marker number this
+    # list and the grid glyph both use. Kept even when the local projection
+    # fails (rather than dropped), so numbering never shifts between the two.
+    kml_waypoints_detail = []
+    if origin_set:
+        for lat, lon, alt, name in kml_waypoints:
+            wn, we = global_to_local(lat, lon, origin_lat, origin_lon)
+            local_ne = (wn, we) if math.isfinite(wn) and math.isfinite(we) else None
+            kml_waypoints_detail.append((lat, lon, alt, name, local_ne))
+
+    kml_fence_rings_local = []
+    if origin_set:
+        for ring in kml_fence_rings:
+            ring_local = []
+            for lat, lon in ring:
+                rn, re_ = global_to_local(lat, lon, origin_lat, origin_lon)
+                if math.isfinite(rn) and math.isfinite(re_):
+                    ring_local.append((rn, re_))
+            if len(ring_local) >= 3:
+                kml_fence_rings_local.append(ring_local)
 
     def satellite_lines():
         out = []
@@ -204,6 +251,17 @@ def draw_map_screen():
             lines.append(DIM + f" last command: {last_ack}" + RESET)
         if not armed:
             lines.append(YELLOW + " vehicle not armed - nudges will be refused" + RESET)
+    else:
+        # Same flight commands as the dashboard, same keys, same
+        # confirmations - see navigation._handle_flight_command_key. Only
+        # shown with jog disarmed: those letters are jog's own while it's on.
+        lines.append(
+            " FLIGHT: " + BOLD + "[a]" + RESET + "arm  " + BOLD + "[d]" + RESET + "disarm  "
+            + BOLD + "[T]" + RESET + "takeoff  " + BOLD + "[L]" + RESET + "land  "
+            + BOLD + "[R]" + RESET + "RTL  " + BOLD + "[h]" + RESET + "hold  "
+            + RED + BOLD + "[K]" + RESET + "kill  " + BOLD + "[H]" + RESET + "home  "
+            + BOLD + "[G]" + RESET + "fence"
+        )
 
     if not valid:
         lines.append("")
@@ -220,11 +278,24 @@ def draw_map_screen():
             lines.append("")
             lines.extend(sat)
 
+        if kml_loaded:
+            lines.append("")
+            lines.append(f" KML       {os.path.basename(kml_path)}   " + DIM + "loaded" + RESET)
+        elif kml_error:
+            lines.append("")
+            lines.append(f" KML       {RED}load failed: {kml_error}{RESET}")
+
         lines.append("")
         if global_valid:
-            lines.append("[i] download satellite image (pins home + robot)   [n] back   ESC panels")
+            lines.append(
+                "[i] download satellite image (pins home + robot)   [o] load kml"
+                "   [O] upload fence   [n] back   ESC panels"
+            )
         else:
-            lines.append(DIM + "[i] satellite image needs a GPS fix" + RESET + "   [n] back   ESC panels")
+            lines.append(
+                DIM + "[i] satellite image needs a GPS fix" + RESET
+                + "   [o] load kml   [O] upload fence   [n] back   ESC panels"
+            )
         return lines
 
     # Grid sized to the panel's actual interior (see chrome.content_area), odd
@@ -245,6 +316,12 @@ def draw_map_screen():
         effective_range = max(
             effective_range, abs(gps_local[0]) * 1.08, abs(gps_local[1]) * 1.08
         )
+    for _lat, _lon, _alt, _name, local_ne in kml_waypoints_detail:
+        if local_ne is not None:
+            effective_range = max(effective_range, abs(local_ne[0]) * 1.08, abs(local_ne[1]) * 1.08)
+    for ring_local in kml_fence_rings_local:
+        for rn, re_ in ring_local:
+            effective_range = max(effective_range, abs(rn) * 1.08, abs(re_) * 1.08)
     effective_range = max(effective_range, 2.0)
 
     grid = [[" "] * grid_w for _ in range(grid_h)]
@@ -303,8 +380,41 @@ def draw_map_screen():
             if grid[row][col] == " ":
                 grid[row][col] = DIM + braille_glyph(bitmask) + RESET
 
-    if origin_set:
-        put(0, 0, "H")
+    if kml_fence_rings_local:
+        # A background reference layer: sampled onto still-blank cells only,
+        # so it never competes with the trail or the live vehicle/home/target
+        # markers drawn below.
+        fence_char = YELLOW + "." + RESET
+
+        def put_fence(north, east):
+            if not (math.isfinite(north) and math.isfinite(east)):
+                return
+            row, col = to_cell(north, east)
+            if row is not None and 0 <= row < grid_h and 0 <= col < grid_w:
+                if grid[row][col] == " ":
+                    grid[row][col] = fence_char
+
+        cell_size = max(effective_range / max(half_w, half_h), 0.01)
+
+        for ring_local in kml_fence_rings_local:
+            closed_ring = ring_local + [ring_local[0]]
+            for (an, ae), (bn, be) in zip(closed_ring, closed_ring[1:]):
+                length = math.hypot(bn - an, be - ae)
+                steps = min(400, max(1, int(length / cell_size)))
+                for i in range(steps + 1):
+                    t = i / steps
+                    put_fence(an + (bn - an) * t, ae + (be - ae) * t)
+
+    for i, (_lat, _lon, _alt, _name, local_ne) in enumerate(kml_waypoints_detail, start=1):
+        if local_ne is not None:
+            put(local_ne[0], local_ne[1], MAGENTA + BOLD + str(i % 10) + RESET)
+
+    if home_local is not None:
+        put(home_local[0], home_local[1], YELLOW + "H" + RESET)
+    elif origin_set:
+        # No HOME_POSITION yet - fall back to the local origin, which usually
+        # coincides with home at EKF init (but can diverge afterwards).
+        put(0, 0, DIM + "H" + RESET)
 
     if has_target:
         put(tx, ty, "*")
@@ -339,9 +449,46 @@ def draw_map_screen():
     if origin_set:
         lines.append(f" Origin H  {origin_lat:.7f}, {origin_lon:.7f}")
     if home_set:
-        lines.append(f" Home      {home_lat:.7f}, {home_lon:.7f}")
+        home_note = "" if home_local is not None else "  " + DIM + "(no local origin yet)" + RESET
+        lines.append(f" Home      {YELLOW}H{RESET}  {home_lat:.7f}, {home_lon:.7f}" + home_note)
 
     lines.extend(gnss_lines())
+
+    if kml_loaded:
+        if origin_set:
+            lines.append(
+                f" KML       {os.path.basename(kml_path)}   "
+                f"waypoints ({MAGENTA}{BOLD}#{RESET}): {len(kml_waypoints)}   "
+                f"fence ({YELLOW}.{RESET}): {len(kml_fence_rings)} ring(s)"
+            )
+        else:
+            lines.append(
+                f" KML       {os.path.basename(kml_path)}   " + DIM
+                + "loaded, but no local origin yet - cannot place it on the grid" + RESET
+            )
+
+        for i, (wlat, wlon, walt, wname, local_ne) in enumerate(kml_waypoints_detail, start=1):
+            label = wname or f"waypoint {i}"
+            if local_ne is not None:
+                local_text = f"N {local_ne[0]:+8.2f}  E {local_ne[1]:+8.2f} m"
+            else:
+                local_text = DIM + "out of range" + RESET
+            lines.append(
+                f"   {MAGENTA}{BOLD}{i % 10}{RESET} {label:<16.16} local {local_text}"
+                f"   global {wlat:.7f}, {wlon:.7f}   alt {walt:.1f} m"
+            )
+    elif kml_error:
+        lines.append(f" KML       {RED}load failed: {kml_error}{RESET}")
+
+    if fence_upload_active:
+        sent = fence_upload_acked_seq + 1
+        lines.append(
+            f" FENCE UP  {YELLOW}uploading{RESET}   vertex {sent}/{fence_upload_total}"
+        )
+    elif fence_upload_status == "COMPLETE":
+        lines.append(f" FENCE UP  {GREEN}ACCEPTED by PX4{RESET}   {fence_upload_total} vertice(s)")
+    elif fence_upload_status == "ERROR":
+        lines.append(f" FENCE UP  {RED}failed: {fence_upload_error}{RESET}")
 
     data_age = now - last_local if last_local else 0.0
     trail_text = f"on ({len(trail)})" if trail_on else "off"
@@ -353,7 +500,8 @@ def draw_map_screen():
         lines.extend(sat)
 
     lines.append(
-        "[g] goto   [x] jog   [+]/[-] zoom   [0] reset   [t] trail   [c] clear   [i] sat   [n] back   ESC panels"
+        "[g] goto   [x] jog   [o] load kml   [O] upload fence   [+]/[-] zoom"
+        "   [0] reset   [t] trail   [c] clear   [i] sat   [n] back   ESC panels"
     )
 
     return lines

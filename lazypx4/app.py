@@ -9,6 +9,7 @@ from .config import (
     BATTERY_CRITICAL,
     BATTERY_LOW,
     HEARTBEAT_TIMEOUT,
+    PREFLIGHT_FAIL_TIMEOUT,
     REFRESH_HZ,
     TELEMETRY_TIMEOUT,
     settings,
@@ -24,6 +25,7 @@ from .mavlink.connection import (
     request_estimator_params,
     send_gcs_heartbeat,
 )
+from .mavlink.fence import check_fence_upload
 from .mavlink.flightlog import check_flight_log_list
 from .mavlink.modes import check_available_modes_request
 from .mavlink.parameters import (
@@ -32,7 +34,7 @@ from .mavlink.parameters import (
     load_parameter_defaults,
 )
 from .mavlink.receiver import mavlink_thread
-from .navigation import process_all_keys
+from .navigation import load_kml_file, process_all_keys
 from .netmon import netmon_thread
 from .render import draw
 from .rosclock import ros_clock_thread
@@ -98,6 +100,13 @@ def update_health():
             lambda: log_info("RC telemetry recovered"),
         )
 
+        if (
+            state.last_preflight_fail
+            and now - state.last_preflight_fail_time > PREFLIGHT_FAIL_TIMEOUT
+        ):
+            state.last_preflight_fail = ""
+            log_info("PREARM check cleared (PX4 stopped reporting it)")
+
         if state.battery >= 0:
             if state.battery <= BATTERY_CRITICAL:
                 if not state.battery_critical_active:
@@ -135,6 +144,9 @@ def run():
     try:
         load_parameter_defaults()
 
+        if settings.kml_path:
+            load_kml_file(settings.kml_path)
+
         session.link = connect_vehicle()
 
         threading.Thread(
@@ -171,7 +183,8 @@ def run():
         )
         log_info(f"Press [f] to flash firmware from {settings.firmware_dir}")
         log_info(f"Press [v] for a LiDAR point-cloud overview ({settings.lidar_topic})")
-        log_info(f"Press [r] for RC stick positions / channels, [w] for a camera preview ({settings.camera_topic_1 or 'no topic set'})")
+        log_info("Press [c] / [r] for control, setpoints and RC stick positions / channels")
+        log_info(f"Press [w] for a camera preview ({settings.camera_topic_1 or 'no topic set'})")
 
         frame_period = 1.0 / REFRESH_HZ
         next_frame = time.monotonic()
@@ -186,6 +199,7 @@ def run():
             check_available_modes_request()
             check_flight_log_list()
             check_calibration()
+            check_fence_upload()
 
             update_health()
 

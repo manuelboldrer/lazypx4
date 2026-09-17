@@ -157,23 +157,6 @@ def send_set_home_current(master):
         return False
 
 
-def send_fence_enable(master, enable: bool):
-    if not vehicle_ready(master):
-        return False
-
-    try:
-        master.mav.command_long_send(
-            master.target_system, master.target_component,
-            mavutil.mavlink.MAV_CMD_DO_FENCE_ENABLE,
-            0, 1.0 if enable else 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        )
-        log_command(f"GEOFENCE {'ENABLE' if enable else 'DISABLE'} command SENT")
-        return True
-    except Exception as exc:
-        log_error(f"Failed to {'enable' if enable else 'disable'} geofence: {exc}")
-        return False
-
-
 def send_reboot(master):
     if not vehicle_ready(master):
         return False

@@ -1,10 +1,15 @@
 """Guided flight commands: takeoff, land, return-to-launch, and "goto".
 
 ``goto`` sends ``MAV_CMD_DO_REPOSITION`` (COMMAND_INT, frame
-``GLOBAL_RELATIVE_ALT``) for a body-frame relative move - forward / right /
-down metres relative to the vehicle's current heading. The same primitive
-backs the keyboard jog control. All of these need a global position (GPS);
-PX4 handles the mode switch itself.
+``GLOBAL_INT``) to an absolute lat/lon/AMSL target, computed one of three
+ways - see :func:`send_goto_body` (body-relative: forward/right/down from
+the current position and heading - also what backs the keyboard jog
+control), :func:`send_goto_local` (an absolute point in the local NED frame,
+same frame as the [n] map's grid/trail) and :func:`send_goto_global` (a
+literal lat/lon/AMSL typed in directly). All three end up sending the exact
+same command via :func:`_send_reposition_command`; only how the target
+lat/lon/AMSL is computed differs. All of these need the vehicle armed; PX4
+handles the mode switch itself.
 """
 
 from __future__ import annotations
@@ -140,6 +145,38 @@ def _body_to_ned(forward, right, yaw_deg):
     return north, east
 
 
+def _send_reposition_command(master, target_lat, target_lon, target_amsl, yaw_deg):
+    """The one MAV_CMD_DO_REPOSITION send shared by every goto variant and
+    the keyboard jog. Caller does its own armed/position checks and logging.
+
+    ``target_amsl`` is AMSL metres (unambiguous). ``yaw_deg`` is an absolute
+    compass heading in degrees, or ``None`` to keep the current heading.
+    """
+    # MAV_CMD_DO_REPOSITION's yaw param is specified in radians (unlike most
+    # other yaw params in the spec, which use degrees), so convert here.
+    yaw_param = math.nan if yaw_deg is None else math.radians(yaw_deg)
+
+    try:
+        master.mav.command_int_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_INT,   # x/y = 1e7 deg, z = AMSL m
+            mavutil.mavlink.MAV_CMD_DO_REPOSITION,
+            0, 0,
+            -1.0,                     # param1: ground speed, -1 = default
+            _REPOSITION_CHANGE_MODE,  # param2: switch to the reposition setpoint
+            0.0,                      # param3: unused for multicopters
+            yaw_param,                # param4: yaw (NaN = keep current)
+            int(round(target_lat * 1e7)),
+            int(round(target_lon * 1e7)),
+            float(target_amsl),
+        )
+        return True
+    except Exception as exc:
+        log_error(f"Failed to send goto: {exc}")
+        return False
+
+
 def send_goto_body(master, forward, right, down, yaw_deg=None, quiet=False):
     """Reposition ``forward`` / ``right`` / ``down`` metres from the current
     position, relative to the current heading.
@@ -168,36 +205,74 @@ def send_goto_body(master, forward, right, down, yaw_deg=None, quiet=False):
 
     target_lat = lat + north / _METRES_PER_DEG
     target_lon = lon + east / (_METRES_PER_DEG * max(0.05, math.cos(math.radians(lat))))
-    # Altitude is sent as AMSL (unambiguous). down == 0 -> target == current
-    # altitude, so a purely horizontal "10 0 0" does not change height.
+    # down == 0 -> target == current altitude, so a purely horizontal
+    # "10 0 0" does not change height.
     target_amsl = amsl - down
 
-    # MAV_CMD_DO_REPOSITION's yaw param is specified in radians (unlike most
-    # other yaw params in the spec, which use degrees), so convert here.
-    yaw_param = math.nan if yaw_deg is None else math.radians(yaw_deg)
-
-    try:
-        master.mav.command_int_send(
-            master.target_system,
-            master.target_component,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_INT,   # x/y = 1e7 deg, z = AMSL m
-            mavutil.mavlink.MAV_CMD_DO_REPOSITION,
-            0, 0,
-            -1.0,                     # param1: ground speed, -1 = default
-            _REPOSITION_CHANGE_MODE,  # param2: switch to the reposition setpoint
-            0.0,                      # param3: unused for multicopters
-            yaw_param,                # param4: yaw (NaN = keep current)
-            int(round(target_lat * 1e7)),
-            int(round(target_lon * 1e7)),
-            float(target_amsl),
-        )
-    except Exception as exc:
-        log_error(f"Failed to send goto: {exc}")
+    if not _send_reposition_command(master, target_lat, target_lon, target_amsl, yaw_deg):
         return False
 
     if not quiet:
         log_command(
-            f"GOTO (DO_REPOSITION) SENT: fwd {forward:+.1f} right {right:+.1f} "
+            f"GOTO (DO_REPOSITION) SENT [relative]: fwd {forward:+.1f} right {right:+.1f} "
             f"down {down:+.1f} m -> {target_lat:.7f}, {target_lon:.7f} @ {target_amsl:.1f} m MSL"
         )
+    return True
+
+
+def send_goto_local(master, north, east, down, yaw_deg=None):
+    """Reposition to an absolute point in the local NED frame - the same
+    frame the [n] map's grid and trail use (origin-relative, not relative to
+    the vehicle's current position or heading). ``down`` is positive-down.
+
+    Needs a known local origin (``GPS_GLOBAL_ORIGIN``) to convert north/east
+    into the lat/lon ``DO_REPOSITION`` actually takes.
+    """
+    if not vehicle_ready(master):
+        return False
+
+    with state.lock:
+        if not state.armed:
+            log_error("Goto refused: vehicle is not armed")
+            return False
+        if not state.local_origin_set:
+            log_error("Goto (local) refused: no local origin yet (GPS_GLOBAL_ORIGIN)")
+            return False
+
+        origin_lat = state.local_origin_lat
+        origin_lon = state.local_origin_lon
+        origin_alt = state.local_origin_alt
+
+    target_lat = origin_lat + north / _METRES_PER_DEG
+    target_lon = origin_lon + east / (
+        _METRES_PER_DEG * max(0.05, math.cos(math.radians(origin_lat)))
+    )
+    target_amsl = origin_alt - down
+
+    if not _send_reposition_command(master, target_lat, target_lon, target_amsl, yaw_deg):
+        return False
+
+    log_command(
+        f"GOTO (DO_REPOSITION) SENT [local NED]: N {north:+.1f} E {east:+.1f} "
+        f"D {down:+.1f} m -> {target_lat:.7f}, {target_lon:.7f} @ {target_amsl:.1f} m MSL"
+    )
+    return True
+
+
+def send_goto_global(master, lat, lon, alt_amsl, yaw_deg=None):
+    """Reposition to a literal global position (lat, lon, AMSL altitude)."""
+    if not vehicle_ready(master):
+        return False
+
+    with state.lock:
+        if not state.armed:
+            log_error("Goto refused: vehicle is not armed")
+            return False
+
+    if not _send_reposition_command(master, lat, lon, alt_amsl, yaw_deg):
+        return False
+
+    log_command(
+        f"GOTO (DO_REPOSITION) SENT [global]: {lat:.7f}, {lon:.7f} @ {alt_amsl:.1f} m MSL"
+    )
     return True

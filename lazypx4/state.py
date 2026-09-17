@@ -84,6 +84,26 @@ class State:
     map_range: float = 30.0
     map_trail_enabled: bool = True
 
+    # KML overlay ([o] on the map screen) - a local visualization aid only,
+    # never uploaded to the vehicle. See lazypx4.kml.
+    kml_path: str = ""
+    kml_loaded: bool = False
+    kml_error: str = ""
+    kml_waypoints: list = field(default_factory=list)
+    kml_fence_rings: list = field(default_factory=list)
+
+    # Geofence upload to the vehicle ([O] on the map screen) - MAVLink
+    # mission protocol, mission_type=FENCE. See lazypx4.mavlink.fence. This
+    # is what actually makes PX4 enforce the loaded KML polygon; loading it
+    # with [o] above never does this by itself.
+    fence_upload_active: bool = False
+    fence_upload_items: list = field(default_factory=list)
+    fence_upload_total: int = 0
+    fence_upload_acked_seq: int = -1
+    fence_upload_started_at: float = 0.0
+    fence_upload_status: str = "IDLE"
+    fence_upload_error: str = ""
+
     # Satellite-image snapshot download.
     map_download_active: bool = False
     map_download_status: str = "IDLE"

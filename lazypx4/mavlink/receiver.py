@@ -11,7 +11,7 @@ import time
 from ..eventlog import log_error, log_info
 from ..state import shutdown_event, state
 from ..util import safe_int
-from . import handlers, modes
+from . import fence, handlers, modes
 from .flightlog import handle_log_data, handle_log_entry
 from .parameters import handle_param_value
 from .shell import handle_serial_control
@@ -62,6 +62,9 @@ _DISPATCH = {
     "SERIAL_CONTROL": handle_serial_control,
     "LOG_ENTRY": handle_log_entry,
     "LOG_DATA": handle_log_data,
+    "MISSION_REQUEST": fence.handle_mission_request,
+    "MISSION_REQUEST_INT": fence.handle_mission_request,
+    "MISSION_ACK": fence.handle_mission_ack,
 }
 
 

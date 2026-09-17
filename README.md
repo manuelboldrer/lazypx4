@@ -40,13 +40,13 @@ UDP link and gives you, from one keyboard-driven screen:
 | `h` | Hold | HOLD-family mode, or `DO_PAUSE_CONTINUE` |
 | `K` | Kill | `MAV_CMD_DO_FLIGHTTERMINATION` - force-stops motors immediately, even in flight; not the same as disarm |
 | `H` | Set home | `MAV_CMD_DO_SET_HOME` - marks the current position as home |
-| `G` | Geofence | `MAV_CMD_DO_FENCE_ENABLE` - prompts for `e`(nable)/`d`(isable); breach shown on the dashboard from `FENCE_STATUS` |
+| `G` | Geofence action | Sets the `GF_ACTION` parameter (`n`one/`w`arning/`h`old/`r`eturn/`t`erminate) - PX4 has no runtime enable/disable command (it answers `MAV_CMD_DO_FENCE_ENABLE` `UNSUPPORTED`), so this is PX4's real mechanism; breach shown on the dashboard from `FENCE_STATUS` |
 | `s` | Sensor calibration | gyro / accel / level / compass / baro, following PX4's `[cal]` prompts |
 | `p` | Parameters | browse, filter (`/`), edit, `ALL` / `CHANGED` view, reboot |
 | `e` | Estimation | EKF health, innovation test ratios, GPS, rangefinder, barometer, height reference |
 | `c` / `r` | Control / RC | attitude / rate / position / velocity setpoints, guidance; RC connection, RSSI/LQ/failsafe, stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value; wind estimate (`WIND_COV`); raw actuator outputs (`SERVO_OUTPUT_RAW`) |
 | `w` | Camera preview | up to two ROS 2 `sensor_msgs/Image`/`CompressedImage` topics shown at once - `1`/`2` set each slot's topic (blank clears it), `b` toggles a low-bandwidth ASCII-only render for slow links |
-| `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog; `i` saves a satellite snapshot |
+| `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, home marker, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog, `o` = load a `.kml` file's fence polygon + waypoints as a visualization overlay (view-only, never uploaded on its own) - each waypoint's local N/E and global lat/lon/alt are listed below the grid, `O` = upload the loaded fence polygon to the vehicle for real (MAVLink mission protocol, `mission_type=FENCE`) so PX4 actually enforces it, `i` saves a satellite snapshot (the loaded `.kml` overlay is drawn onto it too, if one is loaded) |
 | `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
 | `g` | Event log | scrolling INFO / WARN / ERROR / FAILSAFE / COMMAND feed |
 | `t` | MAVLink shell | PX4 NuttShell over `SERIAL_CONTROL`, like QGC's MAVLink Console |
@@ -57,7 +57,7 @@ UDP link and gives you, from one keyboard-driven screen:
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
 change, parameter set, reboot, calibration, goto, arming jog, kill, set home,
-geofence enable/disable) goes through a `type YES` confirmation shown as a
+geofence action, geofence upload) goes through a `type YES` confirmation shown as a
 bar across the bottom of the screen. `lazypx4` never force-arms - takeoff,
 goto and jog all require you to have armed with `a` first, plus a
 GPS/global position.
@@ -71,12 +71,23 @@ never narrowed.
 
 On the **Map screen** (`n`):
 
-**Goto** — `g` sends the vehicle to a body-frame relative point: type
-`forward right down [yaw]` in metres/degrees (e.g. `10 0 0` = 10 m straight
-ahead, same height; `10 0 -2` = 10 m ahead and 2 m up). Sent as
-`MAV_CMD_DO_REPOSITION` from the current position with the target altitude as
-AMSL, so `down 0` never changes height. Needs a GPS fix and an armed vehicle;
-shows the target before the `type YES`.
+**Flight commands** — every dashboard flight command also works here (while
+jog isn't armed): `a`/`d` arm/disarm, `T`/`L`/`R` takeoff/land/RTL, `h` hold,
+`K` kill, `H` set home, `G` geofence action - same keys, same `type YES`
+confirmations. Jog owns `a`/`d`/`h`/etc. instead whenever it's armed (`x`).
+
+**Goto** — `g` sends the vehicle to a target in one of three frames, chosen
+by an optional leading letter (default is relative, unchanged from before):
+
+| Frame | Syntax | Example | Meaning |
+|---|---|---|---|
+| relative *(default)* | `[r] forward right down [yaw]` | `10 0 -2` | body-frame offset from the current position/heading, metres/degrees |
+| local NED | `l N E D [yaw]` | `l 5 -3 -10` | absolute point in the local NED frame (same frame as this screen's grid/trail), origin-relative - needs a known local origin |
+| global | `g lat lon alt [yaw]` | `g 52.218650 6.886870 40` | a literal lat/lon and AMSL altitude |
+
+All three send `MAV_CMD_DO_REPOSITION` to an absolute lat/lon/AMSL target
+(altitude is always AMSL, so relative `down 0` never changes height). Needs
+an armed vehicle; shows the resolved target before the `type YES`.
 
 **Keyboard jog** — `x` arms jog (one `type YES`). While armed, each key sends
 one `DO_REPOSITION` step from the current position, immediately:
@@ -163,6 +174,7 @@ lazypx4 --disk-path /data      # which filesystem the HOST block reports
 lazypx4 --firmware-dir ~/px4/build  # where [f] looks for .px4 files
 lazypx4 --lidar-topic /livox/points # ROS 2 topic for the [v] screen
 lazypx4 --camera-topic /camera/image_raw --camera-topic-2 /camera2/image_raw # [w] screen topics
+lazypx4 --kml mission.kml       # preload the [n] map screen's fence/waypoint overlay
 lazypx4 --help
 ```
 

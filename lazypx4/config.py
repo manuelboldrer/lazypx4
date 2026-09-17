@@ -71,6 +71,11 @@ class Settings:
     camera_topic_1: str = "/camera/image_raw"
     camera_topic_2: str = ""
 
+    #: A .kml file to load as the [n] map screen's fence/waypoint overlay on
+    #: start-up, equivalent to pressing [o] and typing the path by hand. See
+    #: :mod:`lazypx4.kml`.
+    kml_path: Optional[str] = None
+
 
 settings = Settings()
 
@@ -81,6 +86,15 @@ settings = Settings()
 
 HEARTBEAT_TIMEOUT = 3.0
 TELEMETRY_TIMEOUT = 3.0
+
+# A "Preflight Fail" / "PREARM" / "Arming denied" STATUSTEXT is latched onto
+# the dashboard as a standing PREARM banner (see handlers.handle_statustext),
+# since PX4 usually only announces this when someone actually tries to arm.
+# But PX4 also re-broadcasts one continuously (roughly 1 Hz) for as long as
+# the underlying check is genuinely still failing - so if none has repeated
+# within this long, the check must have cleared on PX4's side, and the
+# banner should too rather than sitting there until the next restart.
+PREFLIGHT_FAIL_TIMEOUT = 5.0
 
 REFRESH_HZ = 10.0
 
@@ -252,6 +266,11 @@ FLIGHT_LOG_PAGE_SIZE = 18
 LOG_LIST_TIMEOUT = 5.0
 LOG_LIST_QUIET_PERIOD = 0.60
 
+# Geofence upload (MAVLink mission protocol, mission_type=FENCE - see
+# lazypx4.mavlink.fence). How long to wait for the vehicle to finish
+# requesting every item and send the closing MISSION_ACK.
+FENCE_UPLOAD_TIMEOUT = 15.0
+
 # LOG_DATA carries at most 90 bytes, but PX4 can satisfy one LOG_REQUEST_DATA
 # with a much larger range and stream many LOG_DATA packets back-to-back.
 # Requesting a window amortizes the request/response overhead and is
@@ -359,6 +378,35 @@ EKF2_RNG_CTRL_NAMES = {0: "DISABLED", 1: "CONDITIONAL", 2: "ALWAYS"}
 
 
 # ---------------------------------------------------------------------------
+# Geofence (GF_ACTION parameter)
+# ---------------------------------------------------------------------------
+#
+# PX4 has no runtime "enable/disable" command for its geofence - unlike
+# ArduPilot, it doesn't implement MAV_CMD_DO_FENCE_ENABLE at all (PX4 answers
+# it UNSUPPORTED). Whether a configured fence (the GF_MAX_HOR_DIST /
+# GF_MAX_VER_DIST circle, or an uploaded polygon) is enforced, and what
+# happens on a breach, is entirely controlled by this one parameter -
+# GF_ACTION = 0 is the closest PX4 equivalent to "disabled".
+
+GF_ACTION_NAMES = {
+    0: "NONE (disabled)",
+    1: "WARNING",
+    2: "HOLD",
+    3: "RETURN",
+    4: "TERMINATE",
+}
+
+# Single-letter input accepted by the [G] geofence prompt -> GF_ACTION value.
+GF_ACTION_LETTERS = {
+    "n": 0,
+    "w": 1,
+    "h": 2,
+    "r": 3,
+    "t": 4,
+}
+
+
+# ---------------------------------------------------------------------------
 # Sensor calibration (MAV_CMD_PREFLIGHT_CALIBRATION)
 # ---------------------------------------------------------------------------
 
@@ -398,7 +446,6 @@ COMMAND_NAMES = {
     185: "FLIGHT_TERMINATION",
     192: "DO_REPOSITION",
     193: "DO_PAUSE_CONTINUE",
-    207: "DO_FENCE_ENABLE",
     241: "PREFLIGHT_CALIBRATION",
     246: "PREFLIGHT_REBOOT_SHUTDOWN",
     262: "DO_SET_STANDARD_MODE",
