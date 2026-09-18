@@ -126,16 +126,8 @@ def handle_global_position(msg):
         state.last_rx = now
         state.last_position = now
 
-        state.x = safe_float(msg.lat) / 1e7
-        state.y = safe_float(msg.lon) / 1e7
-        state.z = safe_float(msg.relative_alt) / 1000.0
-
-        state.vx = safe_float(msg.vx) / 100.0
-        state.vy = safe_float(msg.vy) / 100.0
-        state.vz = safe_float(msg.vz) / 100.0
-
-        state.global_lat = state.x
-        state.global_lon = state.y
+        state.global_lat = safe_float(msg.lat) / 1e7
+        state.global_lon = safe_float(msg.lon) / 1e7
         state.global_alt = safe_float(getattr(msg, "alt", 0)) / 1000.0
         state.global_pos_valid = True
 

@@ -83,6 +83,7 @@ class State:
 
     map_range: float = 30.0
     map_trail_enabled: bool = True
+    map_fit_kml: bool = False
 
     # KML overlay ([o] on the map screen) - a local visualization aid only,
     # never uploaded to the vehicle. See lazypx4.kml.
@@ -91,6 +92,20 @@ class State:
     kml_error: str = ""
     kml_waypoints: list = field(default_factory=list)
     kml_fence_rings: list = field(default_factory=list)
+
+    # KML waypoint auto-navigation queue ([W] on the map screen) - see
+    # lazypx4.mavlink.wp_queue. ``wp_queue`` holds the *remaining* targets,
+    # current one first, as (lat, lon, name); ``wp_queue_total`` is the
+    # original count, for an "i/total" progress readout.
+    wp_queue: list = field(default_factory=list)
+    wp_queue_mode: str = ""  # "single" | "sequence" | "random"
+    wp_queue_total: int = 0
+    wp_queue_alt_amsl: float = 0.0
+    wp_queue_face_target: bool = False  # stop, rotate to face each target, then go
+    wp_queue_phase: str = "travel"  # "travel" | "rotate" (only used when facing target)
+    wp_queue_active: bool = False
+    wp_queue_status: str = ""
+    wp_queue_phase_started_at: float = 0.0
 
     # Geofence upload to the vehicle ([O] on the map screen) - MAVLink
     # mission protocol, mission_type=FENCE. See lazypx4.mavlink.fence. This
@@ -110,6 +125,13 @@ class State:
     map_download_path: str = ""
     map_download_error: str = ""
     map_download_started_at: float = 0.0
+
+    # [P] GPS publish feedback banner (map screen) - see lazypx4.gpspub and
+    # lazypx4.app.update_health, which clears it after
+    # config.GPS_PUBLISH_FEEDBACK_TIMEOUT_S.
+    gps_pub_feedback: str = ""
+    gps_pub_feedback_ok: bool = True
+    gps_pub_feedback_time: float = 0.0
 
     # Sensor calibration (MAV_CMD_PREFLIGHT_CALIBRATION + "[cal]" STATUSTEXT).
     cal_active: bool = False

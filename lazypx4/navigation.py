@@ -30,6 +30,7 @@ from .config import (
     settings,
 )
 from .eventlog import log_command, log_error, log_info, log_warn
+from .gpspub import request_gps_publish
 from .jobs import cancel_job, job_running
 from .kml import parse_kml
 from .mavlink.calibration import cancel_calibration, send_calibration
@@ -55,6 +56,7 @@ from .mavlink.guided import (
     send_rtl,
     send_takeoff,
 )
+from .mavlink.wp_queue import build_targets, cancel_wp_queue, start_wp_queue
 from .mavlink.fence import start_fence_upload
 from .mavlink.flightlog import (
     cancel_flight_log_download,
@@ -432,6 +434,95 @@ def _goto_submit(text):
     request_confirmation(
         prompt,
         lambda: send_goto_global(session.link, lat, lon, alt, yaw),
+    )
+
+
+# ---------------------------------------------------------------------------
+# KML waypoint auto-navigation queue ([W] on the map screen)
+# ---------------------------------------------------------------------------
+
+
+def open_wp_queue_input():
+    with state.lock:
+        armed = state.armed
+        kml_loaded = state.kml_loaded
+        wp_count = len(state.kml_waypoints)
+        queue_active = state.wp_queue_active
+
+    if queue_active:
+        cancel_wp_queue("cancelled by user")
+        return
+
+    if not kml_loaded or wp_count == 0:
+        log_error("Waypoint queue: load a KML with waypoints first ([o])")
+        return
+
+    if not armed:
+        log_warn("Waypoint queue: vehicle is not armed")
+
+    request_input(
+        f"Waypoint queue ({wp_count} loaded): <num> one waypoint  |  seq all in order"
+        "  |  rand <N> N legs, randomly picked (repeats allowed, N can exceed"
+        " the count loaded)  |  add 'heading' to yaw towards each target"
+        "   e.g.  3   or   seq heading   or   rand 8",
+        _wp_queue_submit,
+    )
+
+
+# Trailing token that turns on "yaw towards each target" for the queue about
+# to be built - checked/stripped before the mode/count/index parsing below.
+_WP_QUEUE_FACE_WORDS = ("heading", "hdg", "face", "yaw")
+
+
+def _wp_queue_submit(text):
+    tokens = text.split()
+    if not tokens:
+        log_error("Waypoint queue: expected a waypoint number, 'seq', or 'rand <N>'")
+        return
+
+    face_target = tokens[-1].lower() in _WP_QUEUE_FACE_WORDS
+    if face_target:
+        tokens = tokens[:-1]
+    if not tokens:
+        log_error("Waypoint queue: expected a waypoint number, 'seq', or 'rand <N>'")
+        return
+
+    with state.lock:
+        kml_waypoints = list(state.kml_waypoints)
+
+    first = tokens[0].lower()
+
+    try:
+        if first in ("seq", "sequence", "all"):
+            mode = "sequence"
+            targets = build_targets(kml_waypoints, mode)
+        elif first in ("rand", "random"):
+            if len(tokens) < 2 or not tokens[1].lstrip("-").isdigit():
+                log_error("Waypoint queue: 'rand' needs a count, e.g. rand 5")
+                return
+            mode = "random"
+            targets = build_targets(kml_waypoints, mode, count=int(tokens[1]))
+        elif first.lstrip("-").isdigit():
+            mode = "single"
+            targets = build_targets(kml_waypoints, mode, index=int(first))
+        else:
+            log_error("Waypoint queue: expected a waypoint number, 'seq', or 'rand <N>'")
+            return
+    except ValueError as exc:
+        log_error(f"Waypoint queue: {exc}")
+        return
+
+    names = ", ".join(name for _lat, _lon, name in targets[:5])
+    if len(targets) > 5:
+        names += f", ... (+{len(targets) - 5} more)"
+
+    prompt = (
+        f"WAYPOINT QUEUE [{mode}]  {len(targets)} target(s) at the current altitude"
+        + (", facing each target" if face_target else "")
+        + f": {names}. Type YES"
+    )
+    request_confirmation(
+        prompt, lambda: start_wp_queue(session.link, targets, mode, face_target)
     )
 
 
@@ -933,6 +1024,14 @@ def handle_map_key(key):
         open_fence_upload_confirm()
         return
 
+    if key == "W":
+        open_wp_queue_input()
+        return
+
+    if key == "P":
+        request_gps_publish()
+        return
+
     if key in ("+", "="):
         with state.lock:
             state.map_range = clamp(state.map_range / 1.5, 2.0, MAP_RANGE_MAX_M)
@@ -951,6 +1050,11 @@ def handle_map_key(key):
     if key == "t":
         with state.lock:
             state.map_trail_enabled = not state.map_trail_enabled
+        return
+
+    if key == "f":
+        with state.lock:
+            state.map_fit_kml = not state.map_fit_kml
         return
 
     if key == "c":

@@ -8,6 +8,7 @@ import time
 from .config import (
     BATTERY_CRITICAL,
     BATTERY_LOW,
+    GPS_PUBLISH_FEEDBACK_TIMEOUT_S,
     HEARTBEAT_TIMEOUT,
     PREFLIGHT_FAIL_TIMEOUT,
     REFRESH_HZ,
@@ -16,6 +17,7 @@ from .config import (
 )
 from .camera import camera_thread
 from .eventlog import log_error, log_failsafe, log_info, log_warn
+from .gpspub import gps_pub_thread
 from .lidar import lidar_thread
 from .mavlink.calibration import check_calibration
 from .mavlink.commands import check_pending_arm
@@ -34,6 +36,7 @@ from .mavlink.parameters import (
     load_parameter_defaults,
 )
 from .mavlink.receiver import mavlink_thread
+from .mavlink.wp_queue import wp_queue_thread
 from .navigation import load_kml_file, process_all_keys
 from .netmon import netmon_thread
 from .render import draw
@@ -107,6 +110,12 @@ def update_health():
             state.last_preflight_fail = ""
             log_info("PREARM check cleared (PX4 stopped reporting it)")
 
+        if (
+            state.gps_pub_feedback
+            and now - state.gps_pub_feedback_time > GPS_PUBLISH_FEEDBACK_TIMEOUT_S
+        ):
+            state.gps_pub_feedback = ""
+
         if state.battery >= 0:
             if state.battery <= BATTERY_CRITICAL:
                 if not state.battery_critical_active:
@@ -173,6 +182,8 @@ def run():
         threading.Thread(target=ros_clock_thread, daemon=True, name="RosClockThread").start()
         threading.Thread(target=lidar_thread, daemon=True, name="LidarThread").start()
         threading.Thread(target=camera_thread, daemon=True, name="CameraThread").start()
+        threading.Thread(target=wp_queue_thread, daemon=True, name="WpQueueThread").start()
+        threading.Thread(target=gps_pub_thread, daemon=True, name="GpsPubThread").start()
 
         for note in _STARTUP_NOTES:
             log_info(note)

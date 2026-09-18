@@ -19,7 +19,7 @@ import math
 import os
 import time
 
-from ..ansi import BG_RED, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
+from ..ansi import BG_GREEN, BG_RED, BLACK, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
 from ..config import JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M
 from ..state import session, state
 from ..util import clamp, finite, safe_float
@@ -55,6 +55,7 @@ def draw_map_screen():
         trail = list(state.position_trail) if state.map_trail_enabled else []
         trail_on = state.map_trail_enabled
         map_range = state.map_range
+        fit_kml = state.map_fit_kml
 
         has_target = (
             state.last_pos_target > 0
@@ -76,6 +77,13 @@ def draw_map_screen():
         kml_error = state.kml_error
         kml_waypoints = list(state.kml_waypoints)
         kml_fence_rings = [list(ring) for ring in state.kml_fence_rings]
+
+        wp_queue = list(state.wp_queue)
+        wp_queue_mode = state.wp_queue_mode
+        wp_queue_total = state.wp_queue_total
+        wp_queue_face_target = state.wp_queue_face_target
+        wp_queue_active = state.wp_queue_active
+        wp_queue_status = state.wp_queue_status
 
         fence_upload_active = state.fence_upload_active
         fence_upload_status = state.fence_upload_status
@@ -109,6 +117,9 @@ def draw_map_screen():
 
         last_ack = state.last_ack
         armed = state.armed
+
+        gps_pub_feedback = state.gps_pub_feedback
+        gps_pub_feedback_ok = state.gps_pub_feedback_ok
 
     now = time.monotonic()
     panel_width, panel_height = content_area()
@@ -147,6 +158,19 @@ def draw_map_screen():
             wn, we = global_to_local(lat, lon, origin_lat, origin_lon)
             local_ne = (wn, we) if math.isfinite(wn) and math.isfinite(we) else None
             kml_waypoints_detail.append((lat, lon, alt, name, local_ne))
+
+    # The waypoint queue's current target ((lat, lon, name), see
+    # lazypx4.mavlink.wp_queue), projected the same way, so it can be
+    # highlighted on the grid and its distance read out below.
+    wp_queue_target_local = None
+    wp_queue_dist = None
+    if wp_queue_active and wp_queue and origin_set:
+        qlat, qlon, _qname = wp_queue[0]
+        qn, qe = global_to_local(qlat, qlon, origin_lat, origin_lon)
+        if math.isfinite(qn) and math.isfinite(qe):
+            wp_queue_target_local = (qn, qe)
+            if valid:
+                wp_queue_dist = math.hypot(qn - lx, qe - ly)
 
     kml_fence_rings_local = []
     if origin_set:
@@ -240,6 +264,14 @@ def draw_map_screen():
 
     lines = []
 
+    if gps_pub_feedback:
+        banner_bg = BG_GREEN if gps_pub_feedback_ok else BG_RED
+        lines.append(
+            banner_bg + BLACK + BOLD
+            + f" [P] GPS {gps_pub_feedback} "
+            + RESET
+        )
+
     if session.jog_armed:
         lines.append(
             BG_RED + WHITE + BOLD
@@ -307,37 +339,68 @@ def draw_map_screen():
     half_w = grid_w // 2
     half_h = grid_h // 2
 
-    # Range must always contain the vehicle, the GNSS marker and the target.
-    effective_range = map_range
-    effective_range = max(effective_range, abs(lx) * 1.08, abs(ly) * 1.08)
-    if has_target:
-        effective_range = max(effective_range, abs(tx) * 1.08, abs(ty) * 1.08)
-    if gps_local is not None:
-        effective_range = max(
-            effective_range, abs(gps_local[0]) * 1.08, abs(gps_local[1]) * 1.08
-        )
-    # A loaded KML can carry placemarks from more than one site (e.g. a
-    # shared Google Earth project accumulating unrelated test locations). One
-    # placemark tens or hundreds of km away would otherwise force
-    # effective_range out to match it, collapsing the geometry that's
-    # actually near the vehicle down to a handful of pixels - so only let
-    # KML content within the same span the manual zoom itself allows count
-    # towards the auto-fit range.
+    # KML content within the same span the manual zoom itself allows (see the
+    # comment below) - collected once, used either as one more thing the
+    # vehicle-centred view must reach, or as the thing the [f] fit view
+    # centres and scales to.
+    kml_points = []
     for _lat, _lon, _alt, _name, local_ne in kml_waypoints_detail:
         if local_ne is not None and abs(local_ne[0]) <= MAP_RANGE_MAX_M and abs(local_ne[1]) <= MAP_RANGE_MAX_M:
-            effective_range = max(effective_range, abs(local_ne[0]) * 1.08, abs(local_ne[1]) * 1.08)
+            kml_points.append(local_ne)
     for ring_local in kml_fence_rings_local:
         for rn, re_ in ring_local:
             if abs(rn) <= MAP_RANGE_MAX_M and abs(re_) <= MAP_RANGE_MAX_M:
-                effective_range = max(effective_range, abs(rn) * 1.08, abs(re_) * 1.08)
-    effective_range = max(effective_range, 2.0)
+                kml_points.append((rn, re_))
+
+    if fit_kml and kml_points:
+        # [f] fit to KML - centre the grid on the loaded geometry's own
+        # bounding box (plus the live markers, so none of them fall
+        # off-screen) instead of always centring on the local origin.
+        # Vehicle-centred zoom has to reach from the origin all the way to
+        # the far side of the polygon, so when the polygon sits away from
+        # the origin it only ever fills the fraction of the grid past it -
+        # this fits the view to the content itself instead.
+        all_points = [(lx, ly)] + kml_points
+        if has_target:
+            all_points.append((tx, ty))
+        if gps_local is not None:
+            all_points.append(gps_local)
+        ns = [p[0] for p in all_points]
+        es = [p[1] for p in all_points]
+        center_n = (min(ns) + max(ns)) / 2.0
+        center_e = (min(es) + max(es)) / 2.0
+        effective_range = max(
+            max(abs(n - center_n) for n in ns),
+            max(abs(e - center_e) for e in es),
+        ) * 1.08
+        effective_range = max(effective_range, 2.0)
+    else:
+        center_n = 0.0
+        center_e = 0.0
+        # Range must always contain the vehicle, the GNSS marker and the target.
+        effective_range = map_range
+        effective_range = max(effective_range, abs(lx) * 1.08, abs(ly) * 1.08)
+        if has_target:
+            effective_range = max(effective_range, abs(tx) * 1.08, abs(ty) * 1.08)
+        if gps_local is not None:
+            effective_range = max(
+                effective_range, abs(gps_local[0]) * 1.08, abs(gps_local[1]) * 1.08
+            )
+        # A loaded KML can carry placemarks from more than one site (e.g. a
+        # shared Google Earth project accumulating unrelated test locations).
+        # One placemark tens or hundreds of km away would otherwise force
+        # effective_range out to match it, collapsing the geometry that's
+        # actually near the vehicle down to a handful of pixels.
+        for n, e in kml_points:
+            effective_range = max(effective_range, abs(n) * 1.08, abs(e) * 1.08)
+        effective_range = max(effective_range, 2.0)
 
     grid = [[" "] * grid_w for _ in range(grid_h)]
 
     def to_cell(north, east):
         try:
-            col = int(round((east / effective_range) * half_w)) + half_w
-            row = half_h - int(round((north / effective_range) * half_h))
+            col = int(round(((east - center_e) / effective_range) * half_w)) + half_w
+            row = half_h - int(round(((north - center_n) / effective_range) * half_h))
         except (ValueError, OverflowError):
             return None, None
         return row, col
@@ -372,8 +435,8 @@ def draw_map_screen():
             if not (math.isfinite(tn) and math.isfinite(te)):
                 continue
             try:
-                dot_col = int(round((te / effective_range) * dot_half_w) + dot_half_w)
-                dot_row = int(dot_half_h - round((tn / effective_range) * dot_half_h))
+                dot_col = int(round(((te - center_e) / effective_range) * dot_half_w) + dot_half_w)
+                dot_row = int(dot_half_h - round(((tn - center_n) / effective_range) * dot_half_h))
             except (ValueError, OverflowError):
                 continue
             if not (0 <= dot_row < dot_h and 0 <= dot_col < dot_w):
@@ -417,6 +480,11 @@ def draw_map_screen():
         if local_ne is not None:
             put(local_ne[0], local_ne[1], MAGENTA + BOLD + str(i % 10) + RESET)
 
+    # The waypoint queue's current target, drawn over its plain KML marker
+    # so it stands out among the rest while a queue is running.
+    if wp_queue_target_local is not None:
+        put(wp_queue_target_local[0], wp_queue_target_local[1], WHITE + BOLD + "◎" + RESET)
+
     if home_local is not None:
         put(home_local[0], home_local[1], YELLOW + "H" + RESET)
     elif origin_set:
@@ -433,9 +501,16 @@ def draw_map_screen():
 
     put(lx, ly, BOLD + GREEN + heading_arrow(yaw) + RESET)
 
+    if fit_kml and kml_points:
+        fit_note = f"   {GREEN}[f] fit:kml{RESET}  centre N {center_n:+.1f} E {center_e:+.1f}"
+    elif fit_kml:
+        fit_note = f"   {DIM}[f] fit:kml (no geometry loaded){RESET}"
+    else:
+        fit_note = ""
     lines.append(
         f" range +/-{effective_range:6.1f} m      "
         f"{DIM}cell ~ {effective_range / half_w:4.1f} m x {effective_range / half_h:4.1f} m{RESET}"
+        + fit_note
     )
     lines.append("")
 
@@ -488,6 +563,18 @@ def draw_map_screen():
     elif kml_error:
         lines.append(f" KML       {RED}load failed: {kml_error}{RESET}")
 
+    if wp_queue_active and wp_queue:
+        done = wp_queue_total - len(wp_queue) + 1
+        _qlat, _qlon, qname = wp_queue[0]
+        dist_text = f"   dist {wp_queue_dist:.1f} m" if wp_queue_dist is not None else ""
+        face_text = "  facing target" if wp_queue_face_target else ""
+        lines.append(
+            f" WP QUEUE  {WHITE}{BOLD}◎{RESET} [{wp_queue_mode}]  {done}/{wp_queue_total}"
+            f" -> {qname}{dist_text}{face_text}   {GREEN}{wp_queue_status}{RESET}   [W] cancel"
+        )
+    elif wp_queue_status and wp_queue_mode:
+        lines.append(f" WP QUEUE  {DIM}{wp_queue_status}{RESET}")
+
     if fence_upload_active:
         sent = fence_upload_acked_seq + 1
         lines.append(
@@ -508,8 +595,9 @@ def draw_map_screen():
         lines.extend(sat)
 
     lines.append(
-        "[g] goto   [x] jog   [o] load kml   [O] upload fence   [+]/[-] zoom"
-        "   [0] reset   [t] trail   [c] clear   [i] sat   [n] back   ESC panels"
+        "[g] goto   [W] wp queue   [P] publish gps   [x] jog   [o] load kml"
+        "   [O] upload fence   [+]/[-] zoom   [0] reset   [f] fit kml   [t] trail"
+        "   [c] clear   [i] sat   [n] back   ESC panels"
     )
 
     return lines

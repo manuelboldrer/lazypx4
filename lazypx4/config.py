@@ -84,8 +84,8 @@ settings = Settings()
 # Timing / layout
 # ---------------------------------------------------------------------------
 
-HEARTBEAT_TIMEOUT = 3.0
-TELEMETRY_TIMEOUT = 3.0
+HEARTBEAT_TIMEOUT = 5.0
+TELEMETRY_TIMEOUT = 5.0
 
 # A "Preflight Fail" / "PREARM" / "Arming denied" STATUSTEXT is latched onto
 # the dashboard as a standing PREARM banner (see handlers.handle_statustext),
@@ -122,8 +122,8 @@ BATTERY_CRITICAL = 15.0
 GPS_HDOP_GOOD = 1.5
 GPS_HDOP_OK = 3.0
 
-GPS_SATS_GOOD = 8
-GPS_SATS_OK = 6
+GPS_SATS_GOOD = 15
+GPS_SATS_OK = 10
 
 # GPS / estimator horizontal & vertical position accuracy, metres.
 POS_ACC_GOOD = 1.0
@@ -328,6 +328,55 @@ CAMERA_LOW_BW_MAX_COLS = 48
 # tops out at keeps that far-away, irrelevant geometry from wrecking the
 # view of what's nearby.
 MAP_RANGE_MAX_M = 5000.0
+
+
+# ---------------------------------------------------------------------------
+# KML waypoint auto-navigation queue (position map -> [W])
+# ---------------------------------------------------------------------------
+#
+# Fly a loaded KML's waypoints - one, all of them in order, or a random
+# sequence - auto-advancing to the next target once the vehicle arrives at
+# the current one. See lazypx4.mavlink.wp_queue.
+
+# A leg counts as "arrived" once the vehicle is within this many metres of
+# the current target (horizontal, great-circle).
+WP_QUEUE_ARRIVAL_M = 1.0
+
+# How often the queue checks the vehicle's distance/heading to its target.
+WP_QUEUE_POLL_S = 0.5
+
+# A leg that hasn't arrived within this long is abandoned in favour of the
+# next one, rather than leaving the queue stuck forever on an unreachable
+# waypoint (wind, a bad fix, a target inside terrain, ...).
+WP_QUEUE_LEG_TIMEOUT_S = 120.0
+
+# "Facing target" mode (see lazypx4.navigation.open_wp_queue_input) stops at
+# each waypoint and rotates in place before departing for the next one,
+# rather than yawing while it flies. A rotation counts as "done" once the
+# heading is within this many degrees of the target bearing...
+WP_QUEUE_YAW_TOLERANCE_DEG = 8.0
+
+# ...or, failing that, once it's been turning this long (a stuck yaw
+# controller or a target dead astern of a slow one shouldn't hang the queue
+# forever) - it then departs at whatever heading it reached.
+WP_QUEUE_ROTATE_TIMEOUT_S = 20.0
+
+
+# ---------------------------------------------------------------------------
+# GPS position publish (position map -> [P])
+# ---------------------------------------------------------------------------
+#
+# One-shot ROS 2 publish of the vehicle's current GLOBAL_POSITION_INT fix as
+# a sensor_msgs/NavSatFix - for external tooling that wants the vehicle's
+# live position on a topic (e.g. a "mark this spot" workflow) rather than
+# read out of this UI by hand. See lazypx4.gpspub.
+GPS_PUBLISH_TOPIC = "/fire_gps_loc"
+GPS_PUBLISH_FRAME_ID = "gps"
+
+# How long the [P] "published!" / error banner stays on the map screen
+# before it's cleared (see lazypx4.app.update_health, which expires it the
+# same way it expires the dashboard's PREARM banner).
+GPS_PUBLISH_FEEDBACK_TIMEOUT_S = 4.0
 
 
 # ---------------------------------------------------------------------------
