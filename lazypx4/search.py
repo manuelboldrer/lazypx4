@@ -8,7 +8,6 @@ matches; :func:`jump` moves the screen's cursor between them (``n`` / ``N``).
 from __future__ import annotations
 
 from .ansi import DIM, RESET, YELLOW
-from .config import PARAM_PAGE_SIZE
 from .state import session, state
 from .util import clamp
 
@@ -95,7 +94,7 @@ def _set_index(screen, index, row_count):
     elif screen == "parameters":
         with state.lock:
             state.parameter_index = index
-            state.parameter_page = index // PARAM_PAGE_SIZE
+            state.parameter_page = index // session.param_page_size
 
 
 def jump(direction):

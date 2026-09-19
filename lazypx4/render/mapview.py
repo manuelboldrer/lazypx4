@@ -21,6 +21,7 @@ import time
 
 from ..ansi import BG_GREEN, BG_RED, BLACK, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
 from ..config import JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M
+from ..mavlink.wp_queue import distance_m
 from ..state import session, state
 from ..util import clamp, finite, safe_float
 from .chrome import (
@@ -51,6 +52,7 @@ def draw_map_screen():
         yaw = state.yaw
         vx = state.vx
         vy = state.vy
+        mode = state.mode
 
         trail = list(state.position_trail) if state.map_trail_enabled else []
         trail_on = state.map_trail_enabled
@@ -79,6 +81,7 @@ def draw_map_screen():
         kml_fence_rings = [list(ring) for ring in state.kml_fence_rings]
 
         wp_queue = list(state.wp_queue)
+        wp_path = list(state.wp_path)
         wp_queue_mode = state.wp_queue_mode
         wp_queue_total = state.wp_queue_total
         wp_queue_face_target = state.wp_queue_face_target
@@ -183,6 +186,24 @@ def draw_map_screen():
             if len(ring_local) >= 3:
                 kml_fence_rings_local.append(ring_local)
 
+    # The planned queue path: the one awaiting its YES (previewed before
+    # anything is sent) or the running queue's full path.
+    path_preview = (
+        session.confirm_active
+        and session.wp_preview_callback is not None
+        and session.confirm_callback is session.wp_preview_callback
+    )
+    path_targets = list(session.wp_preview) if path_preview else (wp_path if wp_queue_active else [])
+    path_local = []
+    if origin_set:
+        for plat, plon, _pname in path_targets:
+            pn, pe = global_to_local(plat, plon, origin_lat, origin_lon)
+            if math.isfinite(pn) and math.isfinite(pe):
+                path_local.append((pn, pe))
+    path_length_m = sum(
+        distance_m(a[0], a[1], b[0], b[1]) for a, b in zip(path_targets, path_targets[1:])
+    )
+
     def satellite_lines():
         out = []
         if dl_active:
@@ -272,6 +293,9 @@ def draw_map_screen():
             + RESET
         )
 
+    arm_text = GREEN + "ARMED" + RESET if armed else DIM + "DISARMED" + RESET
+    lines.append(f" MODE: {BOLD}{mode}{RESET}   {arm_text}")
+
     if session.jog_armed:
         lines.append(
             BG_RED + WHITE + BOLD
@@ -351,6 +375,10 @@ def draw_map_screen():
         for rn, re_ in ring_local:
             if abs(rn) <= MAP_RANGE_MAX_M and abs(re_) <= MAP_RANGE_MAX_M:
                 kml_points.append((rn, re_))
+
+    for pn, pe in path_local:
+        if abs(pn) <= MAP_RANGE_MAX_M and abs(pe) <= MAP_RANGE_MAX_M:
+            kml_points.append((pn, pe))
 
     if fit_kml and kml_points:
         # [f] fit to KML - centre the grid on the loaded geometry's own
@@ -451,6 +479,8 @@ def draw_map_screen():
             if grid[row][col] == " ":
                 grid[row][col] = DIM + braille_glyph(bitmask) + RESET
 
+    fence_char_cell = YELLOW + "." + RESET
+
     if kml_fence_rings_local:
         # A background reference layer: sampled onto still-blank cells only,
         # so it never competes with the trail or the live vehicle/home/target
@@ -475,6 +505,39 @@ def draw_map_screen():
                 for i in range(steps + 1):
                     t = i / steps
                     put_fence(an + (bn - an) * t, ae + (be - ae) * t)
+
+    if len(path_local) >= 2:
+        # Planned path as Braille dots (same sub-cell packing as the trail),
+        # in cyan so it reads apart from the dim trail and yellow fence.
+        # Only blank / fence cells are taken, so the vehicle, home and
+        # waypoint markers drawn afterwards always win.
+        dot_w, dot_h = grid_w * 2, grid_h * 4
+        dot_half_w, dot_half_h = dot_w / 2.0, dot_h / 2.0
+        path_cells = {}
+        dot_size = max(effective_range / max(dot_half_w, dot_half_h), 0.001)
+
+        for (an, ae), (bn, be) in zip(path_local, path_local[1:]):
+            steps = min(2000, max(1, int(math.hypot(bn - an, be - ae) / dot_size)))
+            for i in range(steps + 1):
+                t = i / steps
+                pn = an + (bn - an) * t
+                pe = ae + (be - ae) * t
+                try:
+                    dot_col = int(round(((pe - center_e) / effective_range) * dot_half_w) + dot_half_w)
+                    dot_row = int(dot_half_h - round(((pn - center_n) / effective_range) * dot_half_h))
+                except (ValueError, OverflowError):
+                    continue
+                if not (0 <= dot_row < dot_h and 0 <= dot_col < dot_w):
+                    continue
+                key = (dot_row // 4, dot_col // 2)
+                path_cells[key] = path_cells.get(key, 0) | BRAILLE_BITS[(dot_col % 2, dot_row % 4)]
+
+        for (row, col), bitmask in path_cells.items():
+            if grid[row][col] == " " or grid[row][col] == fence_char_cell:
+                grid[row][col] = CYAN + braille_glyph(bitmask) + RESET
+
+        put(path_local[0][0], path_local[0][1], GREEN + BOLD + "S" + RESET)
+        put(path_local[-1][0], path_local[-1][1], RED + BOLD + "E" + RESET)
 
     for i, (_lat, _lon, _alt, _name, local_ne) in enumerate(kml_waypoints_detail, start=1):
         if local_ne is not None:
@@ -563,6 +626,16 @@ def draw_map_screen():
     elif kml_error:
         lines.append(f" KML       {RED}load failed: {kml_error}{RESET}")
 
+    if path_local:
+        label = "PREVIEW  " if path_preview else "PATH     "
+        lines.append(
+            f" {label} {CYAN}⣿{RESET} {len(path_targets)} waypoint(s), {path_length_m:.0f} m"
+            f"   {GREEN}{BOLD}S{RESET} start  {RED}{BOLD}E{RESET} end"
+            + (f"   {YELLOW}awaiting YES{RESET}" if path_preview else "")
+        )
+    elif path_preview and path_targets:
+        lines.append(f" PREVIEW   {DIM}no local origin yet - cannot draw the path{RESET}")
+
     if wp_queue_active and wp_queue:
         done = wp_queue_total - len(wp_queue) + 1
         _qlat, _qlon, qname = wp_queue[0]
@@ -570,7 +643,7 @@ def draw_map_screen():
         face_text = "  facing target" if wp_queue_face_target else ""
         lines.append(
             f" WP QUEUE  {WHITE}{BOLD}◎{RESET} [{wp_queue_mode}]  {done}/{wp_queue_total}"
-            f" -> {qname}{dist_text}{face_text}   {GREEN}{wp_queue_status}{RESET}   [W] cancel"
+            f" -> {qname}{dist_text}{face_text}   {GREEN}{wp_queue_status}{RESET}   [W]/[C] cancel"
         )
     elif wp_queue_status and wp_queue_mode:
         lines.append(f" WP QUEUE  {DIM}{wp_queue_status}{RESET}")
@@ -595,7 +668,7 @@ def draw_map_screen():
         lines.extend(sat)
 
     lines.append(
-        "[g] goto   [W] wp queue   [P] publish gps   [x] jog   [o] load kml"
+        "[g] goto   [W] wp queue   [C] coverage   [P] publish gps   [x] jog   [o] load kml"
         "   [O] upload fence   [+]/[-] zoom   [0] reset   [f] fit kml   [t] trail"
         "   [c] clear   [i] sat   [n] back   ESC panels"
     )

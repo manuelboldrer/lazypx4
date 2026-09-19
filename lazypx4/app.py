@@ -143,7 +143,7 @@ _STARTUP_NOTES = (
     "[T] takeoff  [L] land  [R] return-to-launch  (or pick the mode with [m])",
     "Use [m] MODE for all other PX4 flight-mode changes",
     "Press [p] for PX4 parameters ([/] to filter)",
-    "Press [e] estimation, [c] control/setpoints, [n] position map",
+    "Press [c] control/setpoints, [n] mission map",
     "Press [s] for sensor calibration (gyro / accel / level / compass / baro)",
 )
 
@@ -170,7 +170,7 @@ def run():
         send_gcs_heartbeat(session.link)
 
         # Ask PX4 for slightly faster estimation/sensor streams and read the
-        # EKF2_* aiding parameters used by the [e] estimation view.
+        # EKF2_* aiding parameters shown on the dashboard.
         configure_streams(session.link)
         request_estimator_params(session.link)
 

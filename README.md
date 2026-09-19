@@ -42,11 +42,11 @@ UDP link and gives you, from one keyboard-driven screen:
 | `H` | Set home | `MAV_CMD_DO_SET_HOME` - marks the current position as home |
 | `G` | Geofence action | Sets the `GF_ACTION` parameter (`n`one/`w`arning/`h`old/`r`eturn/`t`erminate) - PX4 has no runtime enable/disable command (it answers `MAV_CMD_DO_FENCE_ENABLE` `UNSUPPORTED`), so this is PX4's real mechanism; breach shown on the dashboard from `FENCE_STATUS` |
 | `s` | Sensor calibration | gyro / accel / level / compass / baro, following PX4's `[cal]` prompts |
-| `p` | Parameters | browse, filter (`/`), edit, `ALL` / `CHANGED` view, reboot |
-| `e` | Estimation | EKF health, innovation test ratios, GPS, rangefinder, barometer, height reference |
+| `p` | Parameters | browse, filter (`/`), edit, `ALL` / `CHANGED` view, reboot; like QGC, each value shows what it means (enum label, set bitmask bits, unit) plus a description / allowed values / range block for the selected one - e.g. `EKF2_HGT_REF 1` -> `GPS`, with `0 = Barometric pressure  1 = GPS  2 = Range sensor  3 = Vision` |
+| (home) | Dashboard | the default screen; its **NAVIGATION / ESTIMATION** section shows GPS fix, sats, HDOP/VDOP, EPH/EPV (horizontal/vertical accuracy, metres), RTK state, the global position as latitude / longitude (degrees) / altitude (AMSL, metres), EKF health verdict and estimator position accuracy, home and fence status, RC link |
 | `c` / `r` | Control / RC | attitude / rate / position / velocity setpoints, guidance; RC connection, RSSI/LQ/failsafe, stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value; wind estimate (`WIND_COV`); raw actuator outputs (`SERVO_OUTPUT_RAW`) |
 | `w` | Camera preview | up to two ROS 2 `sensor_msgs/Image`/`CompressedImage` topics shown at once - `1`/`2` set each slot's topic (blank clears it), `b` toggles a low-bandwidth ASCII-only render for slow links |
-| `n` | Position map | ASCII plan view with trail; EKF local arrow + GNSS `⊕` overlaid with their offset, home marker, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog, `o` = load a `.kml` file's fence polygon + waypoints as a visualization overlay (view-only, never uploaded on its own) - each waypoint's local N/E and global lat/lon/alt are listed below the grid, `O` = upload the loaded fence polygon to the vehicle for real (MAVLink mission protocol, `mission_type=FENCE`) so PX4 actually enforces it, `i` saves a satellite snapshot (the loaded `.kml` overlay is drawn onto it too, if one is loaded) |
+| `n` | Mission | (sidebar entry right below Dashboard) ASCII plan view with trail, current flight mode and armed state at the top; EKF local arrow + GNSS `⊕` overlaid with their offset, home marker, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); `g` = goto, `x` = keyboard jog, `o` = load a `.kml` file's fence polygon + waypoints as a visualization overlay (view-only, never uploaded on its own) - each waypoint's local N/E and global lat/lon/alt are listed below the grid, `O` = upload the loaded fence polygon to the vehicle for real (MAVLink mission protocol, `mission_type=FENCE`) so PX4 actually enforces it, `f` = fit the map range to the loaded KML overlay, `W` = fly the KML waypoints (`3` / `seq` / `rand 8`, optional `heading`), `C` = lawnmower coverage of its polygon (`5`, `5 90`), `P` = one-shot publish the vehicle's current position as a ROS 2 `sensor_msgs/NavSatFix`, `i` saves a satellite snapshot (the loaded `.kml` overlay is drawn onto it too, if one is loaded) |
 | `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
 | `g` | Event log | scrolling INFO / WARN / ERROR / FAILSAFE / COMMAND feed |
 | `t` | MAVLink shell | PX4 NuttShell over `SERIAL_CONTROL`, like QGC's MAVLink Console |
@@ -63,6 +63,26 @@ goto and jog all require you to have armed with `a` first, plus a
 GPS/global position.
 
 Vim navigation (`j`/`k`, `Ctrl-D`/`Ctrl-U`, ...) works on every browse screen.
+
+**Key parameters** — a KEY PARAMETERS panel at the top of the `p` screen shows
+the ones you check most, live and decoded (`EKF2_HGT_REF  GPS (1)`,
+`MIS_TAKEOFF_ALT  2.5 m`): flight (`MIS_TAKEOFF_ALT`, `RTL_RETURN_ALT`,
+`MPC_XY_CRUISE`, `MPC_XY_VEL_MAX`, `MPC_LAND_SPEED`), failsafe (`GF_ACTION`,
+`NAV_DLL_ACT`, `NAV_RCL_ACT`, `COM_LOW_BAT_ACT`), estimator (`EKF2_HGT_REF`,
+`EKF2_RNG_CTRL`, `EKF2_OF_CTRL`, `EKF2_RNG_NOISE`, `EKF2_GPS_CTRL`,
+`EKF2_GPS_CHECK`, `EKF2_BARO_CTRL`, `EKF2_MAG_TYPE`) and ROS 2 (`UXRCE_DDS_DOM_ID`,
+`UXRCE_DDS_KEY`, `UXRCE_DDS_NS_IDX`). Edit the list in `KEY_PARAMETER_COLUMNS`
+(`lazypx4/config.py`). On a short terminal the parameter list shrinks to make
+room, and the panel hides itself if that would leave fewer than 6 rows.
+
+**Parameter descriptions** — the MAVLink parameter protocol only carries a
+name and a number, so the meanings come from PX4's `parameters.json`, the same
+metadata QGC uses. A copy from PX4 v1.17 is bundled (`lazypx4/data`); to match
+the exact firmware on your vehicle, point `--param-defaults` at the
+`parameters.json` from its build (e.g.
+`build/px4_fmu-v6x_default/parameters.json`, plain or `.xz`), which also
+enables the `CHANGED` view against the real defaults. Regenerate the bundled
+copy with `scripts/make_param_meta.py`.
 
 **Search** — on the Modes, Event log, Flight logs and Parameters screens,
 `/` opens an incremental search: matches are highlighted, the cursor jumps to
@@ -101,6 +121,30 @@ one `DO_REPOSITION` step from the current position, immediately:
 Default step is 1 m and 15°. Needs an armed vehicle with a GPS fix; `q` will
 not quit while jog is armed. A red `JOG ARMED` banner and the last command
 ACK are shown at the top of the map.
+
+**Waypoint queue** — `W` flies the KML loaded with `o`: one waypoint (`3`),
+all in order (`seq`) or a random sequence (`rand 8`); add `heading` to rotate
+onto each target before flying to it. Legs are `MAV_CMD_DO_REPOSITION` gotos
+that auto-advance on arrival (`WP_QUEUE_ARRIVAL_M`) or time out
+(`WP_QUEUE_LEG_TIMEOUT_S`). Needs an armed vehicle; `W` again cancels.
+
+**Area coverage** — `C` sweeps the KML's (first) polygon with a lawnmower
+pattern. Enter `<spacing m> [angle]`: parallel lines `spacing` metres apart,
+alternating direction, ends pulled 1 m in from the boundary. `angle` is the
+compass heading of the lines (`0` = north-south, `90` = east-west); omit it to
+align them with the polygon's longest edge. Add `heading` (e.g. `5 90
+heading`) to face each leg. The planned path is drawn on the map (cyan, `S`
+start / `E` end, waypoint count and length) while the `type YES` prompt is up
+- ESC discards it - and stays drawn while it flies; `W` queues get the same
+preview. It runs through the same queue as `W` (current altitude, up to 500
+waypoints), and `C` or `W` again cancels. On a concave polygon the vehicle may
+cut across a notch between two segments, so keep the area convex for now.
+
+**GPS publish** — `P` publishes the vehicle's current global position as a
+one-shot ROS 2 `sensor_msgs/NavSatFix` on `/fire_gps_loc`, for external
+tooling that wants the live fix on a topic (e.g. a "mark this spot"
+workflow) rather than read by hand off this screen. Needs the `ros` extra
+below; a banner confirms success/failure.
 
 ## Install
 
@@ -174,7 +218,7 @@ lazypx4 --disk-path /data      # which filesystem the HOST block reports
 lazypx4 --firmware-dir ~/px4/build  # where [f] looks for .px4 files
 lazypx4 --lidar-topic /livox/points # ROS 2 topic for the [v] screen
 lazypx4 --camera-topic /camera/image_raw --camera-topic-2 /camera2/image_raw # [w] screen topics
-lazypx4 --kml mission.kml       # preload the [n] map screen's fence/waypoint overlay
+lazypx4 --kml mission.kml       # preload the [n] mission screen's fence/waypoint overlay
 lazypx4 --help
 ```
 
@@ -211,6 +255,8 @@ or send a PR. Thanks!
 
 [Manuel Boldrer](https://manuelboldrer.github.io/) - manuel.boldrer@gmail.com
 Saxion University of Applied Sciences, [Smart Mechatronics and Robotics Group](https://www.saxion.edu/research/research-groups/smart-mechatronics-and-robotics).
+
+Developed with assistance from Anthropic's Claude AI.
 
 (Also shown in-app on the `?` About screen, along with the running version.)
 

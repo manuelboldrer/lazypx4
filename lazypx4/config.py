@@ -172,8 +172,33 @@ DISTANCE_SENSOR_ORIENTATION_DOWN = 25
 # Parameters
 # ---------------------------------------------------------------------------
 
-# Number of parameters visible on one terminal page.
+# Most parameters visible on one terminal page; the parameter screen shrinks
+# this (session.param_page_size) when the terminal is too short.
 PARAM_PAGE_SIZE = 18
+
+# The KEY PARAMETERS panel at the top of the parameter screen: two columns,
+# each a list of (heading, (parameter names...)). Values are shown live from
+# the loaded parameter list, with the enum / unit meaning next to them.
+KEY_PARAMETER_COLUMNS = (
+    (
+        ("FLIGHT", (
+            "MIS_TAKEOFF_ALT", "RTL_RETURN_ALT", "MPC_XY_CRUISE",
+            "MPC_XY_VEL_MAX", "MPC_LAND_SPEED",
+        )),
+        ("FAILSAFE", (
+            "GF_ACTION", "NAV_DLL_ACT", "NAV_RCL_ACT", "COM_LOW_BAT_ACT",
+        )),
+    ),
+    (
+        ("ESTIMATOR", (
+            "EKF2_HGT_REF", "EKF2_RNG_CTRL", "EKF2_OF_CTRL", "EKF2_RNG_NOISE",
+            "EKF2_GPS_CTRL", "EKF2_GPS_CHECK", "EKF2_BARO_CTRL", "EKF2_MAG_TYPE",
+        )),
+        ("ROS 2 / DDS", (
+            "UXRCE_DDS_DOM_ID", "UXRCE_DDS_KEY", "UXRCE_DDS_NS_IDX",
+        )),
+    ),
+)
 
 # Time allowed for a complete PARAM_REQUEST_LIST response.
 PARAM_REQUEST_TIMEOUT = 15.0
@@ -396,7 +421,7 @@ MAP_DOWNLOAD_TIMEOUT = 25.0
 # Estimation / sensor stream setup
 # ---------------------------------------------------------------------------
 #
-# PX4 streams most of what the estimation view needs on the default MAVLink
+# PX4 streams most of what the dashboard needs on the default MAVLink
 # stream, but at low rates. Ask for a handful of them a bit faster, and read
 # the EKF2_* aiding parameters that describe which sensors the estimator is
 # actually fusing and which height source it treats as primary.

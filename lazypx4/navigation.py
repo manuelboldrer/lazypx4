@@ -26,10 +26,10 @@ from .config import (
     LIDAR_CAM_ROTATE_STEP,
     MAP_RANGE_MAX_M,
     MODE_PAGE_SIZE,
-    PARAM_PAGE_SIZE,
     settings,
 )
 from .eventlog import log_command, log_error, log_info, log_warn
+from .coverage import coverage_path
 from .gpspub import request_gps_publish
 from .jobs import cancel_job, job_running
 from .kml import parse_kml
@@ -44,7 +44,6 @@ from .mavlink.commands import (
 from .mavlink.connection import (
     configure_streams,
     get_param_value,
-    request_estimator_params,
     request_single_param,
     vehicle_ready,
 )
@@ -56,7 +55,7 @@ from .mavlink.guided import (
     send_rtl,
     send_takeoff,
 )
-from .mavlink.wp_queue import build_targets, cancel_wp_queue, start_wp_queue
+from .mavlink.wp_queue import build_targets, cancel_wp_queue, distance_m, start_wp_queue
 from .mavlink.fence import start_fence_upload
 from .mavlink.flightlog import (
     cancel_flight_log_download,
@@ -438,49 +437,87 @@ def _goto_submit(text):
 
 
 # ---------------------------------------------------------------------------
-# KML waypoint auto-navigation queue ([W] on the map screen)
+# KML waypoint queue ([W]) and area coverage ([C]) on the map screen
 # ---------------------------------------------------------------------------
 
 
-def open_wp_queue_input():
+def _queue_precheck(label, need_waypoints):
+    """Shared start of [W] / [C]: a key press while a queue runs cancels it;
+    otherwise check the KML has what this needs. Returns the loaded KML's
+    ``(waypoint_count, ring_count)``, or None if there is nothing to ask."""
     with state.lock:
         armed = state.armed
         kml_loaded = state.kml_loaded
         wp_count = len(state.kml_waypoints)
+        ring_count = len(state.kml_fence_rings)
         queue_active = state.wp_queue_active
 
     if queue_active:
         cancel_wp_queue("cancelled by user")
-        return
+        return None
 
-    if not kml_loaded or wp_count == 0:
-        log_error("Waypoint queue: load a KML with waypoints first ([o])")
-        return
+    if not kml_loaded or (wp_count if need_waypoints else ring_count) == 0:
+        log_error(
+            f"{label}: load a KML with "
+            f"{'waypoints' if need_waypoints else 'a polygon'} first ([o])"
+        )
+        return None
 
     if not armed:
-        log_warn("Waypoint queue: vehicle is not armed")
+        log_warn(f"{label}: vehicle is not armed")
+
+    return wp_count, ring_count
+
+
+def open_wp_queue_input():
+    counts = _queue_precheck("Waypoint queue", need_waypoints=True)
+    if counts is None:
+        return
 
     request_input(
-        f"Waypoint queue ({wp_count} loaded): <num> one waypoint  |  seq all in order"
-        "  |  rand <N> N legs, randomly picked (repeats allowed, N can exceed"
-        " the count loaded)  |  add 'heading' to yaw towards each target"
-        "   e.g.  3   or   seq heading   or   rand 8",
+        f"Waypoint queue ({counts[0]} loaded): <n> | seq | rand <N>  [+ heading]"
+        "   e.g.  3   seq   rand 8 heading",
         _wp_queue_submit,
     )
 
 
+def open_coverage_input():
+    counts = _queue_precheck("Coverage", need_waypoints=False)
+    if counts is None:
+        return
+
+    request_input(
+        "Area coverage of the KML polygon: <line spacing m> [angle deg, 0 = N-S lines]"
+        "  [+ heading]   e.g.  5   or   5 90   (angle omitted = along the longest edge)",
+        _coverage_submit,
+    )
+
+
 # Trailing token that turns on "yaw towards each target" for the queue about
-# to be built - checked/stripped before the mode/count/index parsing below.
+# to be built - checked/stripped before the rest of the input is parsed.
 _WP_QUEUE_FACE_WORDS = ("heading", "hdg", "face", "yaw")
+
+
+def _confirm_queue(label, mode, targets, face_target, summary):
+    """Ask for the typed YES to fly ``targets`` and preview them on the map
+    while that prompt is up (see render.mapview)."""
+    prompt = (
+        f"{label} [{mode}]  {len(targets)} target(s) at the current altitude"
+        + (", facing each target" if face_target else "")
+        + f": {summary}. Type YES"
+    )
+
+    def start():
+        start_wp_queue(session.link, targets, mode, face_target)
+
+    request_confirmation(prompt, start)
+    session.wp_preview = list(targets)
+    session.wp_preview_callback = start
 
 
 def _wp_queue_submit(text):
     tokens = text.split()
-    if not tokens:
-        log_error("Waypoint queue: expected a waypoint number, 'seq', or 'rand <N>'")
-        return
-
-    face_target = tokens[-1].lower() in _WP_QUEUE_FACE_WORDS
+    face_target = bool(tokens) and tokens[-1].lower() in _WP_QUEUE_FACE_WORDS
     if face_target:
         tokens = tokens[:-1]
     if not tokens:
@@ -516,13 +553,36 @@ def _wp_queue_submit(text):
     if len(targets) > 5:
         names += f", ... (+{len(targets) - 5} more)"
 
-    prompt = (
-        f"WAYPOINT QUEUE [{mode}]  {len(targets)} target(s) at the current altitude"
-        + (", facing each target" if face_target else "")
-        + f": {names}. Type YES"
-    )
-    request_confirmation(
-        prompt, lambda: start_wp_queue(session.link, targets, mode, face_target)
+    _confirm_queue("WAYPOINT QUEUE", mode, targets, face_target, names)
+
+
+def _coverage_submit(text):
+    tokens = text.split()
+    face_target = bool(tokens) and tokens[-1].lower() in _WP_QUEUE_FACE_WORDS
+    if face_target:
+        tokens = tokens[:-1]
+
+    with state.lock:
+        rings = [list(ring) for ring in state.kml_fence_rings]
+
+    try:
+        spacing = float(tokens[0])
+        angle = float(tokens[1]) if len(tokens) > 1 else None
+    except (IndexError, ValueError):
+        log_error("Coverage: expected a spacing in metres, e.g. 5 (optional angle: 5 90)")
+        return
+
+    try:
+        path = coverage_path(rings[0], spacing, angle)
+    except ValueError as exc:
+        log_error(f"Coverage: {exc}")
+        return
+
+    targets = [(lat, lon, f"cover {i}/{len(path)}") for i, (lat, lon) in enumerate(path, start=1)]
+    length_m = sum(distance_m(a[0], a[1], b[0], b[1]) for a, b in zip(targets, targets[1:]))
+    _confirm_queue(
+        "AREA COVERAGE", "coverage", targets, face_target,
+        f"{spacing:g} m lines, {length_m:.0f} m of sweep",
     )
 
 
@@ -738,15 +798,15 @@ def handle_log_scroll(key):
 
 
 # ---------------------------------------------------------------------------
-# Estimation / control screens (read-only, just re-request streams)
+# Control screen (read-only, just re-request streams)
 # ---------------------------------------------------------------------------
 
 
 def _scroll_main(key):
     """jk/UP/DOWN/PGUP/PGDN/HOME/END scroll a screen's content when the main
     panel is too short to show all of it - see chrome.draw_frame(). Only for
-    screens with no navigable list of their own (dashboard, estimation,
-    control, calibration); every other screen's UP/DOWN already means
+    screens with no navigable list of their own (dashboard, control,
+    calibration); every other screen's UP/DOWN already means
     something (select a mode/parameter/log line/flight log) and takes
     priority, so this is never wired into their key handlers.
 
@@ -768,42 +828,6 @@ def _scroll_main(key):
         return False
 
     return True
-
-
-def open_estimation_screen():
-    session.screen = "estimation"
-
-    if session.link is None:
-        return
-
-    now = time.monotonic()
-
-    with state.lock:
-        last_request = state.estimator_params_requested_at
-
-    # Re-apply the faster stream rates and (re)read the EKF2_* aiding params
-    # each time the screen is opened, but not more than once every few seconds.
-    if now - last_request > 3.0:
-        configure_streams(session.link)
-        request_estimator_params(session.link)
-
-
-def handle_estimation_key(key):
-    if key == "e":
-        session.screen = "dashboard"
-        return
-
-    if key == "ESC":
-        _focus_sidebar()
-        return
-
-    if _scroll_main(key):
-        return
-
-    if key == "r":
-        configure_streams(session.link)
-        request_estimator_params(session.link)
-        log_info("Re-requested estimation streams and EKF2 params")
 
 
 def open_control_screen():
@@ -1026,6 +1050,10 @@ def handle_map_key(key):
 
     if key == "W":
         open_wp_queue_input()
+        return
+
+    if key == "C":
+        open_coverage_input()
         return
 
     if key == "P":
@@ -1578,7 +1606,7 @@ def open_parameter_screen():
             already_requested = state.parameter_full_list_requested
 
         # A handful of EKF2_* params are fetched individually for the
-        # estimation view; that must not suppress the first full load here.
+        # dashboard; that must not suppress the first full load here.
         if not already_requested:
             request_parameters(session.link)
 
@@ -1646,7 +1674,7 @@ def _param_move(new_index_fn):
         visible_count = len(get_visible_parameters())
         if visible_count:
             state.parameter_index = new_index_fn(state.parameter_index, visible_count)
-            state.parameter_page = state.parameter_index // PARAM_PAGE_SIZE
+            state.parameter_page = state.parameter_index // session.param_page_size
 
 
 def handle_parameter_key(key):
@@ -1683,9 +1711,9 @@ def handle_parameter_key(key):
     elif key == "DOWN":
         _param_move(lambda i, n: (i + 1) % n)
     elif key == "PGUP":
-        _param_move(lambda i, n: max(0, i - PARAM_PAGE_SIZE))
+        _param_move(lambda i, n: max(0, i - session.param_page_size))
     elif key == "PGDN":
-        _param_move(lambda i, n: min(max(0, n - 1), i + PARAM_PAGE_SIZE))
+        _param_move(lambda i, n: min(max(0, n - 1), i + session.param_page_size))
     elif key == "HOME":
         with state.lock:
             state.parameter_index = 0
@@ -1917,10 +1945,6 @@ def process_key(key):
         handle_flight_log_key(key)
         return
 
-    if session.screen == "estimation":
-        handle_estimation_key(key)
-        return
-
     if session.screen == "control":
         handle_control_key(key)
         return
@@ -1962,7 +1986,6 @@ _SCREEN_OPENERS = {
     "l": open_flight_log_screen,
     "p": open_parameter_screen,
     "t": open_shell_screen,
-    "e": open_estimation_screen,
     "c": open_control_screen,
     "r": open_control_screen,
     "w": open_camera_screen,

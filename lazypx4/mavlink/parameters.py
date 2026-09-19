@@ -26,6 +26,7 @@ from ..config import (
     settings,
 )
 from ..eventlog import log_command, log_error, log_info, log_warn
+from .. import parammeta
 from ..models import Parameter
 from ..state import session, state
 from ..util import safe_float, safe_int
@@ -138,6 +139,11 @@ def load_parameter_defaults():
         log_warn(f"PX4 parameter defaults file not found: {path}")
         return
 
+    # The same file also carries the descriptions / enum meanings shown on the
+    # parameter screen, and it is the firmware actually in use, so it wins
+    # over the bundled copy.
+    parammeta.load(path)
+
     try:
         with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
@@ -145,7 +151,14 @@ def load_parameter_defaults():
         defaults = {}
 
         if isinstance(data, dict):
-            if isinstance(data.get("parameters"), dict):
+            if isinstance(data.get("parameters"), list):
+                # PX4's own parameters.json: a list of {"name", "default", ...}.
+                for entry in data["parameters"]:
+                    try:
+                        defaults[str(entry["name"])] = float(entry["default"])
+                    except Exception:
+                        continue
+            elif isinstance(data.get("parameters"), dict):
                 for name, entry in data["parameters"].items():
                     if isinstance(entry, dict):
                         if "default" not in entry:

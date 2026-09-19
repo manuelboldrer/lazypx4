@@ -21,7 +21,6 @@ from .camera import draw_camera_screen
 from .chrome import draw_frame, draw_lines, release_frame_size, snapshot_frame_size
 from .control import draw_control_screen
 from .dashboard import draw_dashboard
-from .estimation import draw_estimation_screen
 from .eventlog_screen import draw_log_screen
 from .firmware import draw_firmware_screen
 from .flightlog import draw_flight_log_screen
@@ -39,7 +38,6 @@ DRAW_FUNCTIONS = {
     "log": draw_log_screen,
     "flight_logs": draw_flight_log_screen,
     "parameters": draw_parameter_screen,
-    "estimation": draw_estimation_screen,
     "control": draw_control_screen,
     "camera": draw_camera_screen,
     "map": draw_map_screen,

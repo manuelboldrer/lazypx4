@@ -198,7 +198,7 @@ def send_gcs_heartbeat(master):
 
 
 def request_estimator_params(master):
-    """Individually read the EKF2_* aiding params for the estimation view."""
+    """Individually read the EKF2_* aiding params for the dashboard."""
     if master is None:
         return
 

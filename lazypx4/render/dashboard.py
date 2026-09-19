@@ -246,6 +246,11 @@ def draw_dashboard():
         gps_hdop = state.gps_hdop
         gps_vdop = state.gps_vdop
         gps_h_acc = state.gps_h_acc
+        gps_v_acc = state.gps_v_acc
+        global_lat = state.global_lat
+        global_lon = state.global_lon
+        global_alt = state.global_alt
+        global_pos_valid = state.global_pos_valid
 
         ekf_status = state.ekf_status
         ekf_flags = state.ekf_flags
@@ -520,12 +525,21 @@ def draw_dashboard():
     hdop_color = graded_color(gps_hdop, GPS_HDOP_GOOD, GPS_HDOP_OK, higher_is_better=False) if gps_hdop > 0 else DIM
     vdop_color = graded_color(gps_vdop, GPS_HDOP_GOOD, GPS_HDOP_OK, higher_is_better=False) if gps_vdop > 0 else DIM
     eph_color = graded_color(gps_h_acc, POS_ACC_GOOD, POS_ACC_OK, higher_is_better=False) if gps_h_acc > 0 else DIM
+    epv_color = graded_color(gps_v_acc, POS_ACC_GOOD, POS_ACC_OK, higher_is_better=False) if gps_v_acc > 0 else DIM
 
     lines.append(
         f"   GPS: {fix_color}{fix_name}{RESET}   Sats: {sats_color}{gps_sats}{RESET}"
         f"   HDOP: {hdop_color}{gps_hdop:.2f}{RESET}   VDOP: {vdop_color}{gps_vdop:.2f}{RESET}"
-        f"   EPH: {eph_color}{gps_h_acc:.2f} m{RESET}   RTK: {rtk_text(gps_fix)}"
+        f"   EPH: {eph_color}{gps_h_acc:.2f} m{RESET}   EPV: {epv_color}{gps_v_acc:.2f} m{RESET}"
+        f"   RTK: {rtk_text(gps_fix)}"
     )
+
+    if global_pos_valid:
+        lines.append(
+            f"   Position: Lat {global_lat:.7f}°   Lon {global_lon:.7f}°   Alt {global_alt:.2f} m AMSL"
+        )
+    else:
+        lines.append("   Position: " + DIM + "no global position" + RESET)
 
     ekf_verdict, ekf_color = ekf_summary(ekf_flags, est_is_estimator_status, ekf_status)
     rc_fs = RED + "YES" + RESET if rc_failsafe else GREEN + "NO" + RESET
@@ -632,7 +646,7 @@ def draw_dashboard():
 
     lines.append("")
     lines.append(ui_section("SCREENS"))
-    lines.append("   [m] MODE   [s] CALIBRATE   [n] MAP (goto + jog)   [e] ESTIMATION   [c] CONTROL")
+    lines.append("   [m] MODE   [s] CALIBRATE   [n] MISSION (map, goto + jog)   [c] CONTROL")
     lines.append("   [p] PARAMETERS   [g] EVENT LOG   [l] FLIGHT LOGS   [t] NSH   [u] USB/NETWORK")
     lines.append("   [q] EXIT   [ESC] panels")
     return lines

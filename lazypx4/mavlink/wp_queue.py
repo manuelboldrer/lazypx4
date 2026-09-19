@@ -3,6 +3,7 @@
 Flies a loaded KML's waypoints - one specific one, all of them in document
 order, or a random sequence of a given length (sampled with replacement, so
 it can be longer than the number of waypoints loaded and can repeat one) -
+or a lawnmower sweep of its polygon ([C], see :mod:`lazypx4.coverage`),
 auto-advancing to the next target once the vehicle arrives at the current
 one. See :func:`lazypx4.navigation.open_wp_queue_input` for the input dialog
 and :mod:`lazypx4.render.mapview` for the on-screen progress readout.
@@ -42,7 +43,7 @@ from .guided import send_goto_global
 _EARTH_RADIUS_M = 6378137.0
 
 
-def _distance_m(lat1, lon1, lat2, lon2):
+def distance_m(lat1, lon1, lat2, lon2):
     """Great-circle distance between two lat/lon points, metres."""
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -165,6 +166,7 @@ def start_wp_queue(master, targets, mode, face_target=False):
 
     with state.lock:
         state.wp_queue = list(targets)
+        state.wp_path = list(targets)
         state.wp_queue_mode = mode
         state.wp_queue_total = len(targets)
         state.wp_queue_alt_amsl = alt_amsl
@@ -292,7 +294,7 @@ def wp_queue_thread():
                 continue
 
             # phase == "travel"
-            dist = _distance_m(cur_lat, cur_lon, target[0], target[1])
+            dist = distance_m(cur_lat, cur_lon, target[0], target[1])
             if dist <= WP_QUEUE_ARRIVAL_M:
                 log_info(f"WAYPOINT QUEUE arrived at '{target[2]}' ({dist:.1f} m)")
                 _advance(session.link, face_target)

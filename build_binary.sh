@@ -41,6 +41,7 @@ env -u PYTHONPATH pyinstaller --onefile -y -n lazypx4 \
     --exclude-module rclpy \
     --exclude-module rclpy._rclpy_pybind11 \
     --paths . \
+    --add-data "lazypx4/data:lazypx4/data" \
     pyinstaller_entry.py
 
 mkdir -p ~/.local/bin

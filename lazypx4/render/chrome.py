@@ -718,7 +718,7 @@ def draw_frame(content_lines, title, screen_key=None):
     frame and paint it - the single call site every screen's draw is routed
     through (see :func:`lazypx4.render.draw`).
 
-    A screen with no navigable list of its own (dashboard, estimation,
+    A screen with no navigable list of its own (dashboard,
     control, calibration) can return more lines than the panel is tall;
     rather than silently clip the bottom off, this scrolls ``content_lines``
     by ``session.main_scroll`` (moved with jk/UP/DOWN - see

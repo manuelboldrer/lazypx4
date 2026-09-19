@@ -20,7 +20,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .config import MAX_LOG_EVENTS, POSITION_TRAIL_MAXLEN, SHELL_MAX_LINES
+from .config import MAX_LOG_EVENTS, PARAM_PAGE_SIZE, POSITION_TRAIL_MAXLEN, SHELL_MAX_LINES
 from .models import PendingArm
 
 
@@ -93,7 +93,7 @@ class State:
     kml_waypoints: list = field(default_factory=list)
     kml_fence_rings: list = field(default_factory=list)
 
-    # KML waypoint auto-navigation queue ([W] on the map screen) - see
+    # KML waypoint auto-navigation queue ([W] / [C] on the map screen) - see
     # lazypx4.mavlink.wp_queue. ``wp_queue`` holds the *remaining* targets,
     # current one first, as (lat, lon, name); ``wp_queue_total`` is the
     # original count, for an "i/total" progress readout.
@@ -106,6 +106,9 @@ class State:
     wp_queue_active: bool = False
     wp_queue_status: str = ""
     wp_queue_phase_started_at: float = 0.0
+    # Every target of the running queue in flying order (``wp_queue`` only
+    # keeps the remaining ones), so the map can draw the whole planned path.
+    wp_path: list = field(default_factory=list)
 
     # Geofence upload to the vehicle ([O] on the map screen) - MAVLink
     # mission protocol, mission_type=FENCE. See lazypx4.mavlink.fence. This
@@ -505,11 +508,14 @@ class Session:
     # ("main", the default - all existing per-screen keys behave exactly as
     # before) or "sidebar" (arrows/jk move `nav_index`, ENTER opens that
     # panel). Toggled with TAB; see navigation.py's `_handle_sidebar_key`.
+    # Parameter rows that fit on screen right now - set every frame by
+    # render.parameters, read by the paging keys so PGUP/PGDN match the view.
+    param_page_size: int = PARAM_PAGE_SIZE
     nav_focus: str = "main"
     nav_index: int = 0
 
     # Vertical scroll for a screen with no navigable list of its own
-    # (dashboard, estimation, control, calibration) whose content is taller
+    # (dashboard, control, calibration) whose content is taller
     # than the main panel - jk/UP/DOWN move it, chrome.draw_frame() clamps it
     # and resets it to 0 whenever `main_scroll_screen` no longer matches the
     # active screen (i.e. you switched screens since it was last set).
@@ -530,6 +536,11 @@ class Session:
     confirm_text: str = ""
     confirm_buffer: str = ""
     confirm_callback: Optional[Callable[[], None]] = None
+    # Path awaiting a YES (``[(lat, lon, name), ...]``) and the confirmation
+    # callback it belongs to - the map previews it only while that exact
+    # confirmation is on screen, so it can never linger after ESC or YES.
+    wp_preview: list = field(default_factory=list)
+    wp_preview_callback: Optional[Callable[[], None]] = None
 
     # Generic single-line text input (used by "goto"), overlaid like the
     # confirmation prompt. ``input_callback`` is called with the entered text.

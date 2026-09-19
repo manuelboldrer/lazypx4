@@ -36,8 +36,9 @@ def _build_parser():
     )
     parser.add_argument(
         "--param-defaults", default=None, metavar="FILE",
-        help="JSON file of PX4 parameter defaults, enabling the "
-             "'changed from default' parameter view",
+        help="PX4 parameters.json (from the firmware build) - enables the "
+             "'changed from default' parameter view and replaces the bundled "
+             "parameter descriptions / enum meanings",
     )
     parser.add_argument(
         "--allow-log-download-while-armed", action="store_true",
