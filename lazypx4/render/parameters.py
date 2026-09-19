@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from .. import parammeta
@@ -76,23 +77,90 @@ def _detail_lines(parameter, width, expanded):
     return out
 
 
-def _key_value_text(parameter, entry, room):
-    """Right-hand side of a KEY PARAMETERS cell: the meaning first (as the
-    user reads it - ``GPS``, ``2.5 m``), the raw number dimmed after it."""
+#: Wording that is clutter in a one-line option list ("Hold mode" -> "Hold").
+_SHORT_LABELS = {
+    "Barometric pressure": "Baro",
+    "Range sensor": "Range",
+    "Disable range fusion": "Off",
+    "Enabled (conditional mode)": "Conditional",
+    "Return at critical level, land at emergency level": "RTL crit / land emerg",
+}
+
+
+def _short(text):
+    """A compact form of an option / bit description for the key panel."""
+    if text in _SHORT_LABELS:
+        return _SHORT_LABELS[text]
+    text = re.sub(r"\s*\([^)]*\)", "", text)  # "Sat count (EKF2_REQ_NSATS)" -> "Sat count"
+    for tail in (" mode", " sensor"):
+        if text.endswith(tail):
+            text = text[: -len(tail)]
+    return text.strip()
+
+
+def _pack(items, width, max_lines):
+    """Greedily pack styled ``items`` into lines of at most ``width`` visible
+    columns; anything past ``max_lines`` becomes a dim ``...``."""
+    lines, current = [], ""
+    for item in items:
+        candidate = f"{current}  {item}" if current else item
+        if current and visible_length(candidate) > width:
+            lines.append(current)
+            current = item
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] += DIM + " ..." + RESET
+    return lines
+
+
+def _key_cell_lines(name, parameter, entry, col_width):
+    """One KEY PARAMETERS entry as display lines. Enums list every option with
+    the one in force highlighted (``0 Baro  [1 GPS]  2 Range``), on the same
+    line when it fits and on a second line when it does not; bitmasks list
+    every bit with the set ones highlighted; anything else is value + unit."""
+    label = f"{name:<18} "
+    room = max(1, col_width - 19)
+    indent = " " * 4
+
     if parameter is None:
-        return DIM + "--" + RESET
+        return [label + DIM + "--" + RESET]
 
     number = parameter_format_value(parameter)
+
     if "e" in entry:
-        label = parammeta.enum_label(entry, parameter.value)
-        text = f"{GREEN}{number}{RESET} {DIM}({label if label is not None else '?'}){RESET}"
-    elif "b" in entry:
-        labels = parammeta.bitmask_labels(entry, parameter.value)
-        text = f"{GREEN}{number}{RESET} {DIM}({', '.join(labels) or 'none'}){RESET}"
-    else:
-        unit = f" {entry['u']}" if entry.get("u") else ""
-        text = f"{GREEN}{number}{RESET}{DIM}{unit}{RESET}"
-    return truncate_visible(text, room)
+        active = parammeta.enum_label(entry, parameter.value)
+        options = []
+        for value, text in entry["e"]:
+            on = active is not None and abs(float(value) - parameter.value) < 1e-6
+            item = f"{value} {_short(text)}"
+            options.append(f"{GREEN}{BOLD}[{item}]{RESET}" if on else f"{DIM}{item}{RESET}")
+        inline = "  ".join(options)
+        if visible_length(inline) <= room:
+            return [label + inline]
+        head = (
+            f"{GREEN}{BOLD}{number} {_short(active)}{RESET}" if active is not None
+            else f"{YELLOW}{number} (not a listed option){RESET}"
+        )
+        return [label + truncate_visible(head, room)] + [
+            indent + line for line in _pack(options, col_width - 4, 3)
+        ]
+
+    if "b" in entry:
+        raw = int(round(parameter.value))
+        bits = [
+            f"{GREEN}{BOLD}{_short(text)}{RESET}" if raw >> bit & 1 else f"{DIM}{_short(text)}{RESET}"
+            for bit, text in entry["b"]
+        ]
+        return [label + f"{GREEN}{number}{RESET}"] + [
+            indent + line for line in _pack(bits, col_width - 4, 3)
+        ]
+
+    unit = f" {entry['u']}" if entry.get("u") else ""
+    return [label + truncate_visible(f"{GREEN}{number}{RESET}{DIM}{unit}{RESET}", room)]
 
 
 def _key_parameter_lines(width):
@@ -114,10 +182,9 @@ def _key_parameter_lines(width):
                 cells.append("")
             cells.append(BOLD + CYAN + heading + RESET)
             for name in names:
-                value = _key_value_text(
-                    params.get(name), parammeta.get(name), max(1, col_width - 19)
+                cells.extend(
+                    _key_cell_lines(name, params.get(name), parammeta.get(name), col_width)
                 )
-                cells.append(f"{name:<18} {value}")
         columns.append(cells)
 
     out = [DIM + " KEY PARAMETERS" + RESET]

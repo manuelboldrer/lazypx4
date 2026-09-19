@@ -71,7 +71,9 @@ the ones you check most, live and decoded (`EKF2_HGT_REF  GPS (1)`,
 `NAV_DLL_ACT`, `NAV_RCL_ACT`, `COM_LOW_BAT_ACT`), estimator (`EKF2_HGT_REF`,
 `EKF2_RNG_CTRL`, `EKF2_OF_CTRL`, `EKF2_RNG_NOISE`, `EKF2_GPS_CTRL`,
 `EKF2_GPS_CHECK`, `EKF2_BARO_CTRL`, `EKF2_MAG_TYPE`) and ROS 2 (`UXRCE_DDS_DOM_ID`,
-`UXRCE_DDS_KEY`, `UXRCE_DDS_NS_IDX`). Edit the list in `KEY_PARAMETER_COLUMNS`
+`UXRCE_DDS_KEY`, `UXRCE_DDS_NS_IDX`). Enum parameters list every option with
+the one in force highlighted (`0 Baro  [1 GPS]  2 Range  3 Vision`) and bitmasks
+list every bit with the set ones highlighted. Edit the list in `KEY_PARAMETER_COLUMNS`
 (`lazypx4/config.py`). On a short terminal the parameter list shrinks to make
 room, and the panel hides itself if that would leave fewer than 6 rows.
 
