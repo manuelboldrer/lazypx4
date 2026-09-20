@@ -1,31 +1,35 @@
 # lazypx4
+A vim-style, keyboard-only TUI for PX4 — built for headless, multi-vehicle ops.
+
+![lazypx4 demo](docs/demo.gif)
 
 A terminal UI for a PX4 vehicle over MAVLink, in the spirit of
 [lazygit](https://github.com/jesseduffield/lazygit) and
 [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by [mrs_uav_status](https://github.com/ctu-mrs/mrs_uav_status.git).
 
-QGroundControl is built for one operator, one vehicle, a mouse and a lot of
-screen space. `lazypx4` is for the other case: driving PX4 over SSH, from a
-companion computer, or across a fleet of vehicles at once, where spinning up
-a full GCS per UAV doesn't scale and every click and window switch costs
-time. There is nothing to click - every screen and every action is a single
-keypress, navigated vim-style (`j`/`k`, `Ctrl-D`/`Ctrl-U`, `/` search, ...),
-with sensible defaults and nothing to configure to get started. One screen,
-one keypress per view, a much faster and cleaner workflow than a mouse-driven
-GCS. Combined with a terminal multiplexer like [tmux](https://tmux.github.io)
-becames a powerfull tool for multi-UAV setup.
 
-It goes beyond MAVLink telemetry, too: the `[v]` LiDAR and `[w]` camera
-screens embed live ROS 2 visualization (`PointCloud2`, `Image`/
-`CompressedImage`) right next to the flight state, the dashboard's
-**HOST**/**SVC** lines and the `[u]` screen monitor the companion computer
-itself - CPU/RAM/disk load, whether rosbag/Zenoh/the uXRCE-DDS agent are up,
-USB device enumeration, Wi-Fi/Ethernet link. Vehicle state, sensor feeds and
-companion-computer health all on one screen make it a genuinely useful
-**preflight check**: arming/GPS/EKF status, camera/LiDAR feeds and companion-computer
-health, all glanceable before you take off.
+QGroundControl is built for one operator, one vehicle, a mouse, and a lot of screen space. lazypx4 is for the other case: driving PX4 over SSH, from a companion computer, or across a fleet of UAVs at once — where spinning up a full GCS per vehicle doesn't scale and every click and window switch costs time.
 
-![lazypx4 demo](docs/demo.gif)
+No mouse, no menus, nothing to configure. One screen, one keypress per view, navigated vim-style (j/k, Ctrl-D/Ctrl-U, / to search). Pair it with tmux and you get a fast, tiled multi-UAV command center from a single terminal.
+
+Beyond MAVLink
+
+lazypx4 doesn't stop at telemetry:
+
+[v] LiDAR / [w] camera — live ROS 2 visualization (PointCloud2, Image/CompressedImage) alongside flight state
+[u] companion computer — CPU/RAM/disk load, USB enumeration, Wi-Fi/Ethernet link
+HOST/SVC dashboard lines — is rosbag running? Is Zenoh up? Is the uXRCE-DDS agent alive?
+
+Vehicle state, sensor feeds, and companion-computer health on one screen make it a genuinely useful preflight check — arming, GPS, EKF status, camera/LiDAR feeds, and system health, all glanceable before takeoff.
+
+Why
+Zero setup — sensible defaults, works out of the box
+Zero mouse — every screen is one keypress away
+Built for fleets — one lightweight process per vehicle, tile them in tmux
+Full stack view — MAVLink + ROS 2 + companion-computer health in one place
+
+One screen. One keypress. No clicking.
+
 
 ## What it does
 
@@ -235,17 +239,55 @@ host-only check for USB device enumeration and Wi-Fi/Ethernet link state.
 
 `lazypx4` needs an interactive terminal at least 60x16.
 
-With PX4 SITL, point one of its MAVLink instances at the port and start:
+### Getting a MAVLink port to connect to
+
+`lazypx4` is a UDP *listener* (`udpin`): it does not go looking for the
+vehicle, PX4 has to send MAVLink to it. So a MAVLink instance on the
+autopilot must target the machine running `lazypx4` on the port you pass
+with `--port` (default `14560`).
+
+**PX4 SITL** - SITL already has an onboard/offboard instance sending to
+`14540`, so the simplest option is `lazypx4 --port 14540`. To use the
+default port instead, add an instance from `pxh>` or the SITL startup
+script:
 
 ```bash
-# in pxh> ,  or via the SITL startup script
-mavlink start -u 14560 -o 14560 -m normal -r 4000000
+mavlink start -u 14560 -o 14560 -m onboard -r 4000000
 ```
 
-> **Calibration / event text:** PX4's `onboard` / `minimal` MAVLink modes do
-> not stream `STATUSTEXT`, so calibration prompts won't appear. Use a
-> `normal`-mode instance (`lazypx4` also re-requests `STATUSTEXT` / `EVENT`
-> on start and on `[r]`).
+**Real vehicle over Ethernet/Wi-Fi** (e.g. Pixhawk 6X/6C-ETH, or a flight
+controller reached through a companion's network) - make the instance start
+on every boot by putting the command in `etc/extras.txt` on the flight
+controller's SD card (PX4 runs `/fs/microsd/etc/extras.txt` at the end of
+startup, after the built-in configuration):
+
+```bash
+# on the SD card mounted on your computer (or via the MAVLink shell `[t]`)
+mkdir -p etc
+cat >> etc/extras.txt <<'EOF'
+mavlink start -u 14560 -o 14560 -t 192.168.1.xx -m onboard -r 4000000
+EOF
+```
+
+- `-t <ip>` is the **companion computer running `lazypx4`** (not the
+  flight controller), `-o` is the port it listens on (`--port`), and `-u`
+  is any free local port on the flight controller (pick one no other
+  instance uses; `14580` is taken by SITL's own offboard instance).
+- `-r 4000000` (bytes/s) is fine on a network link; lower it for a radio.
+- `-m onboard` gives the companion-computer message set (`normal` also works).
+- Reboot the flight controller and check with `mavlink status` in the
+  shell that the new instance is streaming.
+
+`extras.txt` is only read when it exists, so creating it is safe; edits take
+effect after a reboot. If the flight controller is on a **serial/USB port**
+instead, no UDP port exists yet - bridge it with `mavlink-router` or
+`mavproxy.py --master=/dev/ttyACM0 --out=udp:127.0.0.1:14560` and run
+`lazypx4` on that address/port.
+
+Alternatively, instead of `extras.txt`, you can configure a free MAVLink
+instance through its parameters (`MAV_2_CONFIG`, `MAV_2_MODE`,
+`MAV_2_RATE`, ...) and Ethernet settings (`MAV_2_UDP_PRT`); which
+instance/params are available depends on the board and PX4 version.
 
 ## Status
 
