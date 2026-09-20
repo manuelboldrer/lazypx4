@@ -1085,6 +1085,11 @@ def handle_map_key(key):
             state.map_fit_kml = not state.map_fit_kml
         return
 
+    if key == "V":
+        with state.lock:
+            state.map_lidar_enabled = not state.map_lidar_enabled
+        return
+
     if key == "c":
         with state.lock:
             state.position_trail.clear()

@@ -20,10 +20,11 @@ import os
 import time
 
 from ..ansi import BG_GREEN, BG_RED, BLACK, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
-from ..config import JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M
+from ..config import JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M, settings
 from ..mavlink.wp_queue import distance_m
 from ..state import session, state
 from ..util import clamp, finite, safe_float
+from .pointcloud import _COLOR_BANDS as _LIDAR_BANDS, _color_for as _lidar_color
 from .chrome import (
     BRAILLE_BITS,
     braille_glyph,
@@ -58,6 +59,13 @@ def draw_map_screen():
         trail_on = state.map_trail_enabled
         map_range = state.map_range
         fit_kml = state.map_fit_kml
+
+        lidar_on = state.map_lidar_enabled
+        lidar_xs = list(state.lidar_sample_x) if lidar_on else []
+        lidar_ys = list(state.lidar_sample_y) if lidar_on else []
+        lidar_zs = list(state.lidar_sample_z) if lidar_on else []
+        lidar_last = state.lidar_last_received
+        lidar_supported = state.lidar_supported
 
         has_target = (
             state.last_pos_target > 0
@@ -539,6 +547,49 @@ def draw_map_screen():
         put(path_local[0][0], path_local[0][1], GREEN + BOLD + "S" + RESET)
         put(path_local[-1][0], path_local[-1][1], RED + BOLD + "E" + RESET)
 
+    lidar_fresh = bool(lidar_last) and (now - lidar_last) < 2.0
+    lidar_drawn = 0
+    z_min, z_max = (min(lidar_zs), max(lidar_zs)) if lidar_zs else (0.0, 0.0)
+    if lidar_on and lidar_fresh and lidar_xs:
+        # Latest scan, sensor frame (x forward, y left) -> local NED: rotate
+        # by the EKF yaw, translate to the vehicle. Assumes the sensor sits
+        # at the vehicle centre, aligned with the body (lazypx4 doesn't know
+        # the real mount) and ignores roll/pitch. Lowest-priority layer:
+        # blank cells only, so the fence, path, trail and markers win.
+        cos_y = math.cos(math.radians(yaw))
+        sin_y = math.sin(math.radians(yaw))
+        dot_w, dot_h = grid_w * 2, grid_h * 4
+        dot_half_w, dot_half_h = dot_w / 2.0, dot_h / 2.0
+        # Coloured by height (sensor-frame Z, low->high = blue->red, same
+        # bands as the [v] screen) so the floor separates from walls and
+        # obstacles.
+        # cell -> [dot bitmask, tallest point's Z seen in it]
+        lidar_cells = {}
+
+        for px, py, pz in zip(lidar_xs, lidar_ys, lidar_zs):
+            pn = lx + px * cos_y + py * sin_y
+            pe = ly + px * sin_y - py * cos_y
+            try:
+                dot_col = int(round(((pe - center_e) / effective_range) * dot_half_w) + dot_half_w)
+                dot_row = int(dot_half_h - round(((pn - center_n) / effective_range) * dot_half_h))
+            except (ValueError, OverflowError):
+                continue
+            if not (0 <= dot_row < dot_h and 0 <= dot_col < dot_w):
+                continue
+            key = (dot_row // 4, dot_col // 2)
+            bit = BRAILLE_BITS[(dot_col % 2, dot_row % 4)]
+            entry = lidar_cells.get(key)
+            if entry is None:
+                lidar_cells[key] = [bit, pz]
+            else:
+                entry[0] |= bit
+                entry[1] = max(entry[1], pz)
+
+        for (row, col), (bitmask, pz) in lidar_cells.items():
+            if grid[row][col] == " ":
+                grid[row][col] = _lidar_color(pz, z_min, z_max) + braille_glyph(bitmask) + RESET
+                lidar_drawn += 1
+
     for i, (_lat, _lon, _alt, _name, local_ne) in enumerate(kml_waypoints_detail, start=1):
         if local_ne is not None:
             put(local_ne[0], local_ne[1], MAGENTA + BOLD + str(i % 10) + RESET)
@@ -648,6 +699,19 @@ def draw_map_screen():
     elif wp_queue_status and wp_queue_mode:
         lines.append(f" WP QUEUE  {DIM}{wp_queue_status}{RESET}")
 
+    if lidar_on:
+        if not lidar_supported:
+            lidar_note = DIM + "no ROS 2 / numpy - LiDAR unavailable" + RESET
+        elif not lidar_fresh:
+            lidar_note = YELLOW + "no recent scan" + RESET + f" on {settings.lidar_topic}"
+        else:
+            swatches = "".join(f"{color}█{RESET}" for color in _LIDAR_BANDS)
+            lidar_note = (
+                f"{len(lidar_xs)} pts   height {z_min:.1f} m {swatches} {z_max:.1f} m   "
+                f"{DIM}sensor assumed at vehicle centre, rotated by yaw{RESET}"
+            )
+        lines.append(f" LIDAR     {lidar_note}")
+
     if fence_upload_active:
         sent = fence_upload_acked_seq + 1
         lines.append(
@@ -670,7 +734,7 @@ def draw_map_screen():
     lines.append(
         "[g] goto   [W] wp queue   [C] coverage   [P] publish gps   [x] jog   [o] load kml"
         "   [O] upload fence   [+]/[-] zoom   [0] reset   [f] fit kml   [t] trail"
-        "   [c] clear   [i] sat   [n] back   ESC panels"
+        "   [c] clear   [V] lidar   [i] sat   [n] back   ESC panels"
     )
 
     return lines

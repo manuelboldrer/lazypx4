@@ -84,6 +84,9 @@ class State:
     map_range: float = 30.0
     map_trail_enabled: bool = True
     map_fit_kml: bool = False
+    #: [V] on the map screen: draw the latest LiDAR scan (see lazypx4.lidar)
+    #: on the plan view, rotated by the vehicle's yaw and centred on it.
+    map_lidar_enabled: bool = False
 
     # KML overlay ([o] on the map screen) - a local visualization aid only,
     # never uploaded to the vehicle. See lazypx4.kml.

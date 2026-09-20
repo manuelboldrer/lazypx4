@@ -22,7 +22,7 @@ python -m pip show pyinstaller >/dev/null 2>&1 || pip install pyinstaller -q
 # which rclpy itself transitively imports -- see the big comment below), `map` (Pillow, for
 # satellite-snapshot pin annotation) and `tools` (deps of the Tools/ scripts the [f]/[u]/[a]
 # screens shell out to). Safe to (re-)run every build even if some are already installed.
-pip install '.[ros,map,tools]' -q
+pip install '.[ros,map,tools,net]' -q
 
 # Deliberately build with PYTHONPATH unset, even if this shell has ROS 2 sourced (e.g. from
 # ~/.bashrc). rclpy itself is designed to come from *outside* pip -- lazypx4/__init__.py appends
