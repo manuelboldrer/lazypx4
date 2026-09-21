@@ -60,6 +60,11 @@ def parse_kml(path):
     ``Polygon``'s outer boundary - most files have exactly one, but every
     ring found is kept so multiple inclusion/exclusion zones still show up.
 
+    ``ground_alt`` is the site's reference altitude in metres AMSL: the mean of
+    every non-zero altitude found in the file (KML writes ``0`` for "no
+    altitude", so zeros are ignored), or ``None`` if the file carries none.
+    It is used only to sanity-check the EKF's altitude on the map screen.
+
     Raises :class:`KmlError` on anything unreadable, unparseable, or with
     nothing usable in it.
     """
@@ -71,6 +76,7 @@ def parse_kml(path):
     root = tree.getroot()
     waypoints = []
     fence_rings = []
+    altitudes = []
 
     for placemark in root.iter():
         if _local_tag(placemark) != "Placemark":
@@ -87,6 +93,7 @@ def parse_kml(path):
                 if points:
                     lat, lon, alt = points[0]
                     waypoints.append((lat, lon, alt, name))
+                    altitudes.append(alt)
 
         line_el = _find_first(placemark, "LineString")
         if line_el is not None:
@@ -94,6 +101,7 @@ def parse_kml(path):
             if coords_el is not None and coords_el.text:
                 for i, (lat, lon, alt) in enumerate(_parse_coordinates(coords_el.text), start=1):
                     waypoints.append((lat, lon, alt, f"{name} {i}".strip()))
+                    altitudes.append(alt)
 
         for polygon_el in placemark.iter():
             if _local_tag(polygon_el) != "Polygon":
@@ -111,11 +119,16 @@ def parse_kml(path):
             if coords_el is None or not coords_el.text:
                 continue
 
-            ring = [(lat, lon) for lat, lon, _alt in _parse_coordinates(coords_el.text)]
+            ring_points = _parse_coordinates(coords_el.text)
+            altitudes.extend(alt for _lat, _lon, alt in ring_points)
+            ring = [(lat, lon) for lat, lon, _alt in ring_points]
             if len(ring) >= 3:
                 fence_rings.append(ring)
 
     if not waypoints and not fence_rings:
         raise KmlError("no Point/LineString waypoints or Polygon fence found in this file")
 
-    return {"waypoints": waypoints, "fence_rings": fence_rings}
+    nonzero = [alt for alt in altitudes if alt]
+    ground_alt = sum(nonzero) / len(nonzero) if nonzero else None
+
+    return {"waypoints": waypoints, "fence_rings": fence_rings, "ground_alt": ground_alt}

@@ -77,6 +77,14 @@ def draw_map_screen():
         origin_set = state.local_origin_set
         origin_lat = state.local_origin_lat
         origin_lon = state.local_origin_lon
+        origin_alt = state.local_origin_alt
+
+        kml_ground_alt = state.kml_ground_alt
+        rng_dist = state.rangefinder_distance
+        rng_min = state.rangefinder_min
+        rng_max = state.rangefinder_max
+        rng_quality = state.rangefinder_quality
+        last_rng = state.last_rangefinder
 
         home_set = state.home_set
         home_lat = state.home_lat
@@ -278,6 +286,74 @@ def draw_map_screen():
 
         return out
 
+    def altitude_lines():
+        """Cross-check of the EKF altitude against independent references.
+
+        Three heights above the ground, each from a different source:
+        the EKF's global altitude minus the KML site altitude, the EKF's
+        local -D, and the downward rangefinder. On flat ground they should
+        agree, so the offsets between them show which source is off.
+        """
+        out = []
+
+        def verdict(delta):
+            mag = abs(delta)
+            colour = GREEN if mag < 0.5 else (YELLOW if mag < 2.0 else RED)
+            return f"{colour}{delta:+.2f} m{RESET}"
+
+        h_site = None
+        if global_valid:
+            if kml_ground_alt is not None:
+                h_site = galt - kml_ground_alt
+                out.append(
+                    f" ALTITUDE  EKF {galt:.1f} m AMSL   KML site {kml_ground_alt:.1f} m"
+                    f"   {BOLD}{h_site:+.2f} m{RESET} above site"
+                )
+            else:
+                out.append(
+                    f" ALTITUDE  EKF {galt:.1f} m AMSL   "
+                    + DIM
+                    + ("no altitude in the KML - no site reference" if kml_loaded
+                       else "[o] load a KML with altitude for a site reference")
+                    + RESET
+                )
+        else:
+            out.append(" ALTITUDE  " + DIM + "no global position yet" + RESET)
+
+        if valid and global_valid and origin_set:
+            h_local = -lz
+            h_origin = galt - origin_alt
+            out.append(
+                f"   local/global  -D {h_local:+.2f} m   AMSL-origin {h_origin:+.2f} m"
+                f"   diff {verdict(h_local - h_origin)}"
+            )
+
+        rng_age = now - last_rng if last_rng else None
+        if rng_age is None:
+            out.append("   rangefinder   " + DIM + "no DISTANCE_SENSOR data" + RESET)
+        elif rng_age > 2.0:
+            out.append("   rangefinder   " + YELLOW + f"stale ({rng_age:.0f}s ago)" + RESET)
+        elif not (rng_min <= rng_dist <= rng_max):
+            out.append(
+                f"   rangefinder   {YELLOW}{rng_dist:.2f} m out of range{RESET}"
+                f"   {DIM}(valid {rng_min:.2f}-{rng_max:.2f} m){RESET}"
+            )
+        else:
+            quality = f"   q {rng_quality}" if rng_quality >= 0 else ""
+            if h_site is not None:
+                ref, ref_name = h_site, "above site"
+            elif valid:
+                ref, ref_name = -lz, "local -D"
+            else:
+                ref, ref_name = None, ""
+            cmp_text = (
+                f"   vs {ref:+.2f} m {ref_name}   diff {verdict(rng_dist - ref)}"
+                if ref is not None else ""
+            )
+            out.append(f"   rangefinder   {rng_dist:.2f} m{quality}{cmp_text}")
+
+        return out
+
     if has_target:
         tx = finite(tx, math.nan)
         ty = finite(ty, math.nan)
@@ -336,6 +412,7 @@ def draw_map_screen():
 
         lines.append("")
         lines.extend(gnss_lines())
+        lines.extend(altitude_lines())
 
         sat = satellite_lines()
         if sat:
@@ -650,6 +727,7 @@ def draw_map_screen():
         lines.append(f" Home      {YELLOW}H{RESET}  {home_lat:.7f}, {home_lon:.7f}" + home_note)
 
     lines.extend(gnss_lines())
+    lines.extend(altitude_lines())
 
     if kml_loaded:
         if origin_set:

@@ -951,6 +951,7 @@ def load_kml_file(text):
         state.kml_path = path
         state.kml_waypoints = result["waypoints"]
         state.kml_fence_rings = result["fence_rings"]
+        state.kml_ground_alt = result["ground_alt"]
         state.kml_loaded = True
         state.kml_error = ""
 

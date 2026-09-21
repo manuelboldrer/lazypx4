@@ -95,6 +95,10 @@ class State:
     kml_error: str = ""
     kml_waypoints: list = field(default_factory=list)
     kml_fence_rings: list = field(default_factory=list)
+    #: Site reference altitude (m AMSL) taken from the KML's own coordinates,
+    #: or None if the file carries no altitude. Used by the map screen's
+    #: ALTITUDE check against the EKF / rangefinder.
+    kml_ground_alt: float | None = None
 
     # KML waypoint auto-navigation queue ([W] / [C] on the map screen) - see
     # lazypx4.mavlink.wp_queue. ``wp_queue`` holds the *remaining* targets,
