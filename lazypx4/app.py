@@ -19,6 +19,7 @@ from .camera import camera_thread
 from .eventlog import log_error, log_failsafe, log_info, log_warn
 from .gpspub import gps_pub_thread
 from .lidar import lidar_thread
+from .mapfeeds import mapfeeds_thread
 from .mavlink.calibration import check_calibration
 from .mavlink.commands import check_pending_arm
 from .mavlink.connection import (
@@ -181,6 +182,7 @@ def run():
         threading.Thread(target=netmon_thread, daemon=True, name="NetMonThread").start()
         threading.Thread(target=ros_clock_thread, daemon=True, name="RosClockThread").start()
         threading.Thread(target=lidar_thread, daemon=True, name="LidarThread").start()
+        threading.Thread(target=mapfeeds_thread, daemon=True, name="MapFeedsThread").start()
         threading.Thread(target=camera_thread, daemon=True, name="CameraThread").start()
         threading.Thread(target=wp_queue_thread, daemon=True, name="WpQueueThread").start()
         threading.Thread(target=gps_pub_thread, daemon=True, name="GpsPubThread").start()

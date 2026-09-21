@@ -1091,6 +1091,11 @@ def handle_map_key(key):
             state.map_lidar_enabled = not state.map_lidar_enabled
         return
 
+    if key == "N":
+        with state.lock:
+            state.map_navpath_enabled = not state.map_navpath_enabled
+        return
+
     if key == "c":
         with state.lock:
             state.position_trail.clear()

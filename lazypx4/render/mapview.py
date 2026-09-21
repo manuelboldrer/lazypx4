@@ -19,7 +19,7 @@ import math
 import os
 import time
 
-from ..ansi import BG_GREEN, BG_RED, BLACK, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
+from ..ansi import BG_GREEN, BG_RED, BLACK, BLUE, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
 from ..config import JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M, settings
 from ..mavlink.wp_queue import distance_m
 from ..state import session, state
@@ -66,6 +66,16 @@ def draw_map_screen():
         lidar_zs = list(state.lidar_sample_z) if lidar_on else []
         lidar_last = state.lidar_last_received
         lidar_supported = state.lidar_supported
+
+        navpath_on = state.map_navpath_enabled
+        navpath_pts = list(state.navpath_points) if navpath_on else []
+        navpath_last = state.navpath_last_received
+        mapfeeds_supported = state.mapfeeds_supported
+
+        fire_last = state.fire_last_received
+        fire_lat = state.fire_lat
+        fire_lon = state.fire_lon
+        fire_alt = state.fire_alt
 
         has_target = (
             state.last_pos_target > 0
@@ -219,6 +229,20 @@ def draw_map_screen():
     path_length_m = sum(
         distance_m(a[0], a[1], b[0], b[1]) for a, b in zip(path_targets, path_targets[1:])
     )
+
+    # /fire_gps_loc fix projected into the local NED frame: (north, east) and
+    # the fix's own local down (from its AMSL altitude and the origin's).
+    # ``fire_rel`` is the fire relative to the vehicle, NED, and 3-D distance.
+    fire_local = None
+    fire_rel = None
+    if fire_last and origin_set:
+        fn, fe = global_to_local(fire_lat, fire_lon, origin_lat, origin_lon)
+        if math.isfinite(fn) and math.isfinite(fe):
+            fire_d = -(fire_alt - origin_alt) if math.isfinite(fire_alt) else 0.0
+            fire_local = (fn, fe)
+            if valid:
+                rn, re_, rd = fn - lx, fe - ly, fire_d - lz
+                fire_rel = (rn, re_, rd, math.sqrt(rn * rn + re_ * re_ + rd * rd))
 
     def satellite_lines():
         out = []
@@ -465,6 +489,14 @@ def draw_map_screen():
         if abs(pn) <= MAP_RANGE_MAX_M and abs(pe) <= MAP_RANGE_MAX_M:
             kml_points.append((pn, pe))
 
+    for pn, pe in navpath_pts:
+        if abs(pn) <= MAP_RANGE_MAX_M and abs(pe) <= MAP_RANGE_MAX_M:
+            kml_points.append((pn, pe))
+
+    if fire_local is not None:
+        if abs(fire_local[0]) <= MAP_RANGE_MAX_M and abs(fire_local[1]) <= MAP_RANGE_MAX_M:
+            kml_points.append(fire_local)
+
     if fit_kml and kml_points:
         # [f] fit to KML - centre the grid on the loaded geometry's own
         # bounding box (plus the live markers, so none of them fall
@@ -624,6 +656,36 @@ def draw_map_screen():
         put(path_local[0][0], path_local[0][1], GREEN + BOLD + "S" + RESET)
         put(path_local[-1][0], path_local[-1][1], RED + BOLD + "E" + RESET)
 
+    if len(navpath_pts) >= 2:
+        # The ROS planned path (/navsat_utm_path): Braille dots in blue, same
+        # sub-cell packing and blank/fence-only rule as the queue path above
+        # (which therefore wins where they overlap), S/E at its two ends.
+        dot_w, dot_h = grid_w * 2, grid_h * 4
+        dot_half_w, dot_half_h = dot_w / 2.0, dot_h / 2.0
+        navpath_cells = {}
+        dot_size = max(effective_range / max(dot_half_w, dot_half_h), 0.001)
+
+        for (an, ae), (bn, be) in zip(navpath_pts, navpath_pts[1:]):
+            steps = min(2000, max(1, int(math.hypot(bn - an, be - ae) / dot_size)))
+            for i in range(steps + 1):
+                t = i / steps
+                try:
+                    dot_col = int(round((((ae + (be - ae) * t) - center_e) / effective_range) * dot_half_w) + dot_half_w)
+                    dot_row = int(dot_half_h - round((((an + (bn - an) * t) - center_n) / effective_range) * dot_half_h))
+                except (ValueError, OverflowError):
+                    continue
+                if not (0 <= dot_row < dot_h and 0 <= dot_col < dot_w):
+                    continue
+                key = (dot_row // 4, dot_col // 2)
+                navpath_cells[key] = navpath_cells.get(key, 0) | BRAILLE_BITS[(dot_col % 2, dot_row % 4)]
+
+        for (row, col), bitmask in navpath_cells.items():
+            if grid[row][col] == " " or grid[row][col] == fence_char_cell:
+                grid[row][col] = BLUE + braille_glyph(bitmask) + RESET
+
+        put(navpath_pts[0][0], navpath_pts[0][1], GREEN + BOLD + "s" + RESET)
+        put(navpath_pts[-1][0], navpath_pts[-1][1], RED + BOLD + "e" + RESET)
+
     lidar_fresh = bool(lidar_last) and (now - lidar_last) < 2.0
     lidar_drawn = 0
     z_min, z_max = (min(lidar_zs), max(lidar_zs)) if lidar_zs else (0.0, 0.0)
@@ -685,6 +747,9 @@ def draw_map_screen():
 
     if has_target:
         put(tx, ty, "*")
+
+    if fire_local is not None:
+        put(fire_local[0], fire_local[1], RED + BOLD + "F" + RESET)
 
     # GNSS fix first, so the green EKF arrow wins the cell when they coincide.
     if gps_local is not None:
@@ -790,6 +855,36 @@ def draw_map_screen():
             )
         lines.append(f" LIDAR     {lidar_note}")
 
+    if fire_last:
+        if fire_local is None:
+            lines.append(
+                f" FIRE      {RED}{BOLD}F{RESET}  {fire_lat:.7f}, {fire_lon:.7f}   "
+                + DIM + "no local origin yet - cannot place it on the grid" + RESET
+            )
+        else:
+            lines.append(
+                f" FIRE      {RED}{BOLD}F{RESET}  {fire_lat:.7f}, {fire_lon:.7f}   alt {fire_alt:.1f} m"
+                f"   from origin H: N {fire_local[0]:+8.2f}  E {fire_local[1]:+8.2f} m"
+            )
+            if fire_rel is not None:
+                lines.append(
+                    f"   Fire rel. UAV (NED)  N {fire_rel[0]:+8.2f}   E {fire_rel[1]:+8.2f}"
+                    f"   D {fire_rel[2]:+8.2f} m   dist {fire_rel[3]:.1f} m"
+                )
+
+    if navpath_on:
+        if not mapfeeds_supported:
+            navpath_note = DIM + "no ROS 2 - path unavailable" + RESET
+        elif not navpath_last:
+            navpath_note = YELLOW + "no path received yet" + RESET + f" on {settings.navpath_topic}"
+        else:
+            age = now - navpath_last
+            navpath_note = (
+                f"{BLUE}⣿{RESET} {len(navpath_pts)} pose(s)   {GREEN}{BOLD}s{RESET} start  "
+                f"{RED}{BOLD}e{RESET} end   {DIM}received {age:.0f}s ago (ENU map frame){RESET}"
+            )
+        lines.append(f" NAVPATH   {navpath_note}")
+
     if fence_upload_active:
         sent = fence_upload_acked_seq + 1
         lines.append(
@@ -812,7 +907,7 @@ def draw_map_screen():
     lines.append(
         "[g] goto   [W] wp queue   [C] coverage   [P] publish gps   [x] jog   [o] load kml"
         "   [O] upload fence   [+]/[-] zoom   [0] reset   [f] fit kml   [t] trail"
-        "   [c] clear   [V] lidar   [i] sat   [n] back   ESC panels"
+        "   [c] clear   [V] lidar   [N] navpath   [i] sat   [n] back   ESC panels"
     )
 
     return lines

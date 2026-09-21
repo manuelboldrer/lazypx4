@@ -65,6 +65,10 @@ class Settings:
     #: subscribes to - see :mod:`lazypx4.lidar`.
     lidar_topic: str = "/livox/points"
 
+    #: ROS 2 topic (nav_msgs/Path, ENU map frame) the [N] overlay on the map
+    #: screen draws - see :mod:`lazypx4.mapfeeds`.
+    navpath_topic: str = "/navsat_utm_path"
+
     #: ROS 2 image topics (sensor_msgs/Image or CompressedImage) the [w]
     #: camera screen subscribes to - up to two, shown at once. An empty
     #: string leaves that slot unused. See :mod:`lazypx4.camera`.

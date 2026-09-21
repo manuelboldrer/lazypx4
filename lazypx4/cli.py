@@ -61,6 +61,11 @@ def _build_parser():
              f"screen (default: {settings.lidar_topic})",
     )
     parser.add_argument(
+        "--navpath-topic", default=settings.navpath_topic, metavar="TOPIC",
+        help="ROS 2 nav_msgs/Path topic (ENU map frame) the [N] overlay on the "
+             f"[n] map screen draws (default: {settings.navpath_topic})",
+    )
+    parser.add_argument(
         "--camera-topic", default=settings.camera_topic_1, metavar="TOPIC",
         help="ROS 2 sensor_msgs/Image or CompressedImage topic for the "
              f"[w] camera screen's first slot (default: {settings.camera_topic_1})",
@@ -90,6 +95,7 @@ def main(argv=None):
     settings.firmware_dir = args.firmware_dir
     settings.tools_dir = args.tools_dir
     settings.lidar_topic = args.lidar_topic
+    settings.navpath_topic = args.navpath_topic
     settings.camera_topic_1 = args.camera_topic
     settings.camera_topic_2 = args.camera_topic_2
     settings.kml_path = args.kml

@@ -87,6 +87,8 @@ class State:
     #: [V] on the map screen: draw the latest LiDAR scan (see lazypx4.lidar)
     #: on the plan view, rotated by the vehicle's yaw and centred on it.
     map_lidar_enabled: bool = False
+    #: [N] on the map screen: draw the ROS planned path (see lazypx4.mapfeeds).
+    map_navpath_enabled: bool = False
 
     # KML overlay ([o] on the map screen) - a local visualization aid only,
     # never uploaded to the vehicle. See lazypx4.kml.
@@ -472,6 +474,18 @@ class State:
     firmware_index: int = 0
     firmware_ports: list = field(default_factory=list)
     firmware_port_index: int = 0
+
+    # ROS feeds on the map screen - see lazypx4.mapfeeds. `navpath_points` is
+    # local (north, east) metres; the fire fix is global and projected by the
+    # renderer. `*_last_received` is 0.0 until the first message.
+    mapfeeds_supported: bool = False
+    navpath_points: list = field(default_factory=list)
+    navpath_frame_id: str = ""
+    navpath_last_received: float = 0.0
+    fire_lat: float = 0.0
+    fire_lon: float = 0.0
+    fire_alt: float = 0.0
+    fire_last_received: float = 0.0
 
     # LiDAR point-cloud overview ([v] screen) - see lazypx4.lidar. Runs its
     # own rclpy node independent of the ROS clock's, so `lidar_supported`
