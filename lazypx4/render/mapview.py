@@ -19,6 +19,7 @@ import math
 import os
 import time
 
+from .. import mapfeeds
 from ..ansi import (
     BG_GREEN, BG_RED, BLACK, BLUE, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW,
     visible_length,
@@ -934,6 +935,8 @@ def draw_map_screen():
     if navpath_on:
         if not mapfeeds_supported:
             navpath_note = DIM + "no ROS 2 - path unavailable" + RESET
+            if mapfeeds.IMPORT_ERROR:
+                navpath_note += f" {DIM}({mapfeeds.IMPORT_ERROR}){RESET}"
         elif not navpath_last and navpath_publishers:
             navpath_note = (
                 YELLOW + "published but nothing received yet" + RESET

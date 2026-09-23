@@ -35,15 +35,25 @@ from .config import GPS_PUBLISH_TOPIC, settings
 from .eventlog import log_warn
 from .state import shutdown_event, state
 
+#: Why the imports below failed, shown on the map screen instead of a bare
+#: "unavailable".
+IMPORT_ERROR = ""
+
 try:
     import rclpy
     from nav_msgs.msg import Path
     from rclpy.executors import SingleThreadedExecutor
-    from rclpy.event_handler import SubscriptionEventCallbacks
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from sensor_msgs.msg import NavSatFix
-except Exception:
+
+    # rclpy.event_handler is Iron+; Humble has the same class in qos_event.
+    try:
+        from rclpy.event_handler import SubscriptionEventCallbacks
+    except ImportError:
+        from rclpy.qos_event import SubscriptionEventCallbacks
+except Exception as exc:
+    IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
     rclpy = None
     Path = None
     SingleThreadedExecutor = None
