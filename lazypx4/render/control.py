@@ -135,7 +135,6 @@ def draw_control_screen():
         rc_received = state.rc_received
         rc_timeout_active = state.rc_timeout_active
         rc_rssi = state.rc_rssi
-        rc_lq = state.rc_lq
         rc_failsafe = state.rc_failsafe
         last_rc = state.last_rc
 
@@ -237,13 +236,14 @@ def draw_control_screen():
         rc_conn_text = GREEN + "CONNECTED" + RESET
 
     rc_fs_text = RED + BOLD + "FAILSAFE" + RESET if rc_failsafe else GREEN + "ok" + RESET
-    rssi_color = graded_color(rc_rssi, RC_SIGNAL_GOOD, RC_SIGNAL_OK) if rc_received else DIM
-    lq_color = graded_color(rc_lq, RC_SIGNAL_GOOD, RC_SIGNAL_OK) if rc_received else DIM
+    if rc_received and rc_rssi >= 0:
+        rssi_text = graded_color(rc_rssi, RC_SIGNAL_GOOD, RC_SIGNAL_OK) + f"{rc_rssi}%" + RESET
+    else:
+        rssi_text = DIM + "--" + RESET
 
     lines.append(ui_section("RC INPUT", age(last_rc)))
     lines.append(
-        f"   {rc_conn_text}   RSSI: {rssi_color}{rc_rssi}{RESET}"
-        f"   LQ: {lq_color}{rc_lq}%{RESET}   {rc_fs_text}"
+        f"   {rc_conn_text}   RSSI: {rssi_text}   {rc_fs_text}"
     )
 
     if not rc_received or not any(rc_channels):

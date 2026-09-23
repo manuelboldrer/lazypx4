@@ -18,6 +18,7 @@ from .config import (
     FLIGHT_LOG_PAGE_SIZE,
     GF_ACTION_LETTERS,
     GF_ACTION_NAMES,
+    GPS_PUBLISH_TOPIC,
     JOG_MIN_INTERVAL,
     JOG_STEP_M,
     JOG_STEP_MAX_M,
@@ -343,7 +344,7 @@ def _fence_submit(text):
 
 
 # ---------------------------------------------------------------------------
-# Goto - relative (default), local NED, or global (map screen)
+# Goto - relative (default), local NED, global, or the fire fix (map screen)
 # ---------------------------------------------------------------------------
 
 # Leading token -> frame. "r"/"rel"/"relative" match the historical no-prefix
@@ -354,6 +355,7 @@ _GOTO_FRAME_WORDS = {
     "r": "relative", "rel": "relative", "relative": "relative",
     "l": "local", "local": "local",
     "g": "global", "global": "global",
+    "f": "fire", "fire": "fire",
 }
 
 
@@ -366,8 +368,8 @@ def open_goto_input():
 
     request_input(
         "Goto: [r] fwd right down [yaw] (default)  |  [l] N E D [yaw]  |"
-        "  [g] lat lon alt [yaw]   e.g.  10 0 -2   or   l 5 -3 -10   or"
-        "   g 52.218650 6.886870 40",
+        "  [g] lat lon alt [yaw]  |  [f] fire [alt MSL] [yaw]   e.g.  10 0 -2   or"
+        "   l 5 -3 -10   or   g 52.218650 6.886870 40   or   f",
         _goto_submit,
     )
 
@@ -389,6 +391,10 @@ def _goto_submit(text):
         nums = [float(t) for t in tokens]
     except ValueError:
         log_error("Goto: expected numbers after the optional frame letter")
+        return
+
+    if frame == "fire":
+        _goto_fire(nums)
         return
 
     if len(nums) < 3:
@@ -433,6 +439,51 @@ def _goto_submit(text):
     request_confirmation(
         prompt,
         lambda: send_goto_global(session.link, lat, lon, alt, yaw),
+    )
+
+
+def _goto_fire(nums):
+    """``f [alt] [yaw]`` - fly over the last /fire_gps_loc fix. The fix's own
+    altitude is where the fire is (i.e. the ground), so it is never used as
+    the target: the default is the vehicle's current AMSL altitude."""
+    with state.lock:
+        fire_last = state.fire_last_received
+        fire_lat = state.fire_lat
+        fire_lon = state.fire_lon
+        global_valid = state.global_pos_valid
+        vehicle_lat = state.global_lat
+        vehicle_lon = state.global_lon
+        vehicle_alt = state.global_alt
+
+    if not fire_last:
+        log_error(f"Goto fire: no fix received on {GPS_PUBLISH_TOPIC} yet")
+        return
+    if not (math.isfinite(fire_lat) and math.isfinite(fire_lon)):
+        log_error("Goto fire: the last fire fix has no valid lat/lon")
+        return
+
+    if nums:
+        alt = nums[0]
+    elif global_valid and math.isfinite(vehicle_alt):
+        alt = vehicle_alt
+    else:
+        log_error("Goto fire: no global position to hold the altitude - give one: f <alt MSL>")
+        return
+
+    yaw = nums[1] if len(nums) >= 2 else None
+    distance = (
+        f"{distance_m(vehicle_lat, vehicle_lon, fire_lat, fire_lon):.1f} m away, "
+        if global_valid else ""
+    )
+    prompt = (
+        f"GOTO [fire]  {fire_lat:.7f}, {fire_lon:.7f} @ {alt:.1f} m MSL"
+        + ("" if nums else " (current alt)")
+        + (f"  yaw {yaw:.0f}" if yaw is not None else "")
+        + f"   ({distance}fix {time.monotonic() - fire_last:.0f}s old). Type YES"
+    )
+    request_confirmation(
+        prompt,
+        lambda: send_goto_global(session.link, fire_lat, fire_lon, alt, yaw),
     )
 
 

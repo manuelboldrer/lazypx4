@@ -19,8 +19,11 @@ import math
 import os
 import time
 
-from ..ansi import BG_GREEN, BG_RED, BLACK, BLUE, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW
-from ..config import JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M, settings
+from ..ansi import (
+    BG_GREEN, BG_RED, BLACK, BLUE, BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, WHITE, YELLOW,
+    visible_length,
+)
+from ..config import GPS_PUBLISH_TOPIC, JOG_YAW_STEP_DEG, MAP_RANGE_MAX_M, settings
 from ..mavlink.wp_queue import distance_m
 from ..state import session, state
 from ..util import clamp, finite, safe_float
@@ -33,6 +36,30 @@ from .chrome import (
     gps_fix_display,
     heading_arrow,
 )
+
+
+_MAP_KEYS = (
+    "[g] goto", "[W] wp queue", "[C] coverage", "[P] publish gps", "[x] jog",
+    "[o] load kml", "[O] upload fence", "[+]/[-] zoom", "[0] reset", "[f] fit kml",
+    "[t] trail", "[c] clear", "[V] lidar", "[N] navpath", "[i] sat", "[n] back",
+    "ESC panels",
+)
+
+
+def _wrap_keys(keys, width, sep="   "):
+    """Pack key hints onto as few lines as fit in ``width`` columns."""
+    lines = []
+    current = ""
+    for key in keys:
+        candidate = current + sep + key if current else key
+        if current and visible_length(candidate) > width:
+            lines.append(current)
+            current = key
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
 
 
 def _baseline_text(metres):
@@ -76,6 +103,7 @@ def draw_map_screen():
         fire_lat = state.fire_lat
         fire_lon = state.fire_lon
         fire_alt = state.fire_alt
+        fire_publishers = list(state.fire_publishers)
 
         has_target = (
             state.last_pos_target > 0
@@ -401,6 +429,9 @@ def draw_map_screen():
             + RESET
         )
 
+    # Rows the header uses beyond the one the grid budget below assumes.
+    header_extra_rows = 0
+
     arm_text = GREEN + "ARMED" + RESET if armed else DIM + "DISARMED" + RESET
     lines.append(f" MODE: {BOLD}{mode}{RESET}   {arm_text}")
 
@@ -419,13 +450,17 @@ def draw_map_screen():
         # Same flight commands as the dashboard, same keys, same
         # confirmations - see navigation._handle_flight_command_key. Only
         # shown with jog disarmed: those letters are jog's own while it's on.
-        lines.append(
-            " FLIGHT: " + BOLD + "[a]" + RESET + "arm  " + BOLD + "[d]" + RESET + "disarm  "
-            + BOLD + "[T]" + RESET + "takeoff  " + BOLD + "[L]" + RESET + "land  "
-            + BOLD + "[R]" + RESET + "RTL  " + BOLD + "[h]" + RESET + "hold  "
-            + RED + BOLD + "[K]" + RESET + "kill  " + BOLD + "[H]" + RESET + "home  "
-            + BOLD + "[G]" + RESET + "fence"
-        )
+        flight_lines = _wrap_keys((
+            " FLIGHT: " + BOLD + "[a]" + RESET + "arm", BOLD + "[d]" + RESET + "disarm",
+            BOLD + "[T]" + RESET + "takeoff", BOLD + "[L]" + RESET + "land",
+            BOLD + "[R]" + RESET + "RTL", BOLD + "[h]" + RESET + "hold",
+            RED + BOLD + "[K]" + RESET + "kill", BOLD + "[H]" + RESET + "home",
+            BOLD + "[G]" + RESET + "fence",
+        ), panel_width, sep="  ")
+        # Continuation rows line up under the first key.
+        lines.append(flight_lines[0])
+        lines.extend(" " * 9 + line for line in flight_lines[1:])
+        header_extra_rows = len(flight_lines) - 1
 
     if not valid:
         lines.append("")
@@ -451,23 +486,26 @@ def draw_map_screen():
             lines.append(f" KML       {RED}load failed: {kml_error}{RESET}")
 
         lines.append("")
-        if global_valid:
-            lines.append(
-                "[i] download satellite image (pins home + robot)   [o] load kml"
-                "   [O] upload fence   [n] back   ESC panels"
-            )
-        else:
-            lines.append(
-                DIM + "[i] satellite image needs a GPS fix" + RESET
-                + "   [o] load kml   [O] upload fence   [n] back   ESC panels"
-            )
+        sat_key = (
+            "[i] download satellite image (pins home + robot)" if global_valid
+            else DIM + "[i] satellite image needs a GPS fix" + RESET
+        )
+        lines.extend(_wrap_keys(
+            (sat_key, "[o] load kml", "[O] upload fence", "[n] back", "ESC panels"),
+            panel_width,
+        ))
         return lines
+
+    key_lines = _wrap_keys(_MAP_KEYS, panel_width)
 
     # Grid sized to the panel's actual interior (see chrome.content_area), odd
     # dimensions so there is a true centre. -2 for the "  " row prefix below;
-    # -17 for this screen's own non-grid lines (range/local/gnss/footer etc).
-    grid_w = clamp((panel_width - 2) | 1, 21, 103)
-    grid_h = clamp((panel_height - 17) | 1, 11, 35)
+    # -16 for this screen's own non-grid lines (range/local/gnss etc) plus
+    # however many rows the key hints and FLIGHT keys wrap onto (-1 more for
+    # the same odd-rounding as the width).
+    # (n - 1) | 1 is the largest odd number <= n.
+    grid_w = clamp((panel_width - 3) | 1, 21, 103)
+    grid_h = clamp((panel_height - 17 - len(key_lines) - header_extra_rows) | 1, 11, 35)
 
     half_w = grid_w // 2
     half_h = grid_h // 2
@@ -856,6 +894,10 @@ def draw_map_screen():
         lines.append(f" LIDAR     {lidar_note}")
 
     if fire_last:
+        fire_age = f"   {DIM}received {now - fire_last:.0f}s ago{RESET}"
+        fire_off_map = fire_local is not None and not (
+            abs(fire_local[0]) <= MAP_RANGE_MAX_M and abs(fire_local[1]) <= MAP_RANGE_MAX_M
+        )
         if fire_local is None:
             lines.append(
                 f" FIRE      {RED}{BOLD}F{RESET}  {fire_lat:.7f}, {fire_lon:.7f}   "
@@ -865,12 +907,27 @@ def draw_map_screen():
             lines.append(
                 f" FIRE      {RED}{BOLD}F{RESET}  {fire_lat:.7f}, {fire_lon:.7f}   alt {fire_alt:.1f} m"
                 f"   from origin H: N {fire_local[0]:+8.2f}  E {fire_local[1]:+8.2f} m"
+                + fire_age
             )
+            if fire_off_map:
+                lines.append(
+                    f"   {YELLOW}more than {MAP_RANGE_MAX_M / 1000:.0f} km from the origin"
+                    f" - not drawn on the grid{RESET}"
+                )
             if fire_rel is not None:
                 lines.append(
                     f"   Fire rel. UAV (NED)  N {fire_rel[0]:+8.2f}   E {fire_rel[1]:+8.2f}"
                     f"   D {fire_rel[2]:+8.2f} m   dist {fire_rel[3]:.1f} m"
                 )
+    elif mapfeeds_supported:
+        if fire_publishers:
+            fire_note = (
+                YELLOW + "published but nothing received yet" + RESET
+                + f" - {DIM}{', '.join(fire_publishers)}{RESET}"
+            )
+        else:
+            fire_note = DIM + "no publisher seen" + RESET
+        lines.append(f" FIRE      {fire_note} on {GPS_PUBLISH_TOPIC}")
 
     if navpath_on:
         if not mapfeeds_supported:
@@ -904,10 +961,6 @@ def draw_map_screen():
     if sat:
         lines.extend(sat)
 
-    lines.append(
-        "[g] goto   [W] wp queue   [C] coverage   [P] publish gps   [x] jog   [o] load kml"
-        "   [O] upload fence   [+]/[-] zoom   [0] reset   [f] fit kml   [t] trail"
-        "   [c] clear   [V] lidar   [N] navpath   [i] sat   [n] back   ESC panels"
-    )
+    lines.extend(key_lines)
 
     return lines

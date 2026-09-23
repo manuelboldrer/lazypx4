@@ -72,6 +72,7 @@ def handle_heartbeat(msg):
         state.base_mode = base_mode
         state.custom_mode = custom_mode
         state.system_status = system_status
+        state.autopilot = autopilot
 
         if mode_now == "UNKNOWN":
             for entry in state.custom_modes.values():
@@ -259,26 +260,45 @@ def handle_nav_controller_output(msg):
         state.nav_xtrack_error = safe_float(getattr(msg, "xtrack_error", 0))
 
 
+def _battery_remaining(value):
+    # int8 percent; -1 means "not estimated".
+    value = safe_float(value, -1)
+    return value if 0 <= value <= 100 else -1.0
+
+
+def _battery_current_a(value):
+    # int16 in centi-amps (10 mA); -1 means "not measured".
+    value = safe_float(value, -1)
+    return value / 100.0 if value >= 0 else -1.0
+
+
+def _battery_status_voltage_v(msg):
+    # BATTERY_STATUS has no pack voltage, only per-cell ``voltages`` (mV,
+    # UINT16_MAX = unused) plus ``voltages_ext`` for cells 11-14 (mV, 0 =
+    # unused). A pack without cell monitoring reports its total in cell 0.
+    cells = [v for v in (getattr(msg, "voltages", None) or []) if v != 65535]
+    cells += [v for v in (getattr(msg, "voltages_ext", None) or []) if v not in (0, 65535)]
+    total_mv = sum(safe_float(v, 0) for v in cells)
+    return total_mv / 1000.0 if total_mv > 0 else -1.0
+
+
 def handle_battery_status(msg):
     now = time.monotonic()
+    battery_id = safe_int(getattr(msg, "id", 0), 0)
 
     with state.lock:
         state.last_rx = now
 
-        remaining = safe_float(getattr(msg, "battery_remaining", -1), -1)
+        # Follow a single pack (the lowest id seen) so several batteries
+        # don't take turns overwriting the display.
+        if state.battery_id < 0 or battery_id < state.battery_id:
+            state.battery_id = battery_id
+        if battery_id != state.battery_id:
+            return
 
-        if remaining >= 0:
-            state.battery = remaining
-
-        voltage_mv = safe_float(getattr(msg, "voltage_battery", 0), 0)
-
-        if voltage_mv > 0:
-            state.voltage = voltage_mv / 1000.0
-
-        current = safe_float(getattr(msg, "current_battery", 0), 0)
-
-        if current > 0:
-            state.current = current
+        state.battery = _battery_remaining(getattr(msg, "battery_remaining", -1))
+        state.voltage = _battery_status_voltage_v(msg)
+        state.current = _battery_current_a(getattr(msg, "current_battery", -1))
 
 
 def handle_sys_status(msg):
@@ -287,20 +307,16 @@ def handle_sys_status(msg):
     with state.lock:
         state.last_rx = now
 
-        remaining = safe_float(getattr(msg, "battery_remaining", -1), -1)
+        # SYS_STATUS only carries the first battery; once BATTERY_STATUS is
+        # flowing it is the richer source, so don't mix the two.
+        if state.battery_id < 0:
+            state.battery = _battery_remaining(getattr(msg, "battery_remaining", -1))
 
-        if remaining >= 0:
-            state.battery = remaining
+            # uint16 mV; UINT16_MAX means "not sent".
+            voltage_mv = safe_float(getattr(msg, "voltage_battery", 65535), 65535)
+            state.voltage = voltage_mv / 1000.0 if 0 < voltage_mv < 65535 else -1.0
 
-        voltage_mv = safe_float(getattr(msg, "voltage_battery", 0), 0)
-
-        if voltage_mv > 0:
-            state.voltage = voltage_mv / 1000.0
-
-        current = safe_float(getattr(msg, "current_battery", 0), 0)
-
-        if current > 0:
-            state.current = current / 100.0
+            state.current = _battery_current_a(getattr(msg, "current_battery", -1))
 
         health = safe_int(getattr(msg, "onboard_control_sensors_health", 0))
 
@@ -314,6 +330,14 @@ def handle_sys_status(msg):
             state.mag = bool(health & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_3D_MAG)
             state.baro = bool(health & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE)
             state.gps_sensor = bool(health & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_GPS)
+
+            # MAVLink has no RC failsafe flag; the autopilot reports it as the
+            # RC receiver sensor being present and enabled but unhealthy.
+            rc_bit = mavutil.mavlink.MAV_SYS_STATUS_SENSOR_RC_RECEIVER
+            state.rc_failsafe = bool(
+                state.sensors_present & state.sensors_enabled & rc_bit
+                and not health & rc_bit
+            )
         except Exception:
             pass
 
@@ -709,13 +733,23 @@ def handle_rc(msg):
 
         state.rc_received = True
 
-        state.rc_rssi = safe_int(getattr(msg, "rssi", 0))
-        state.rc_lq = safe_int(getattr(msg, "lq", 0))
-        state.rc_failsafe = bool(getattr(msg, "rc_failsafe", False))
+        # uint8 with UINT8_MAX = unknown. PX4 already sends 0-100 %; the
+        # MAVLink spec (and ArduPilot) use 0-254, so rescale that to %.
+        rssi = safe_int(getattr(msg, "rssi", 255), 255)
+        if rssi >= 255:
+            state.rc_rssi = -1
+        elif state.autopilot == mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA:
+            state.rc_rssi = round(rssi * 100 / 254)
+        else:
+            state.rc_rssi = min(rssi, 100)
 
-        state.rc_channels = [
-            safe_int(getattr(msg, f"chan{i}_raw", 0)) for i in range(1, 19)
-        ]
+        # RC_CHANNELS_RAW only carries channels 1-8; keep the rest from
+        # RC_CHANNELS instead of zeroing them every other message.
+        count = 8 if msg.get_type() == "RC_CHANNELS_RAW" else 18
+        channels = list(state.rc_channels)
+        for i in range(count):
+            channels[i] = safe_int(getattr(msg, f"chan{i + 1}_raw", 0))
+        state.rc_channels = channels
 
 
 def handle_vfr_hud(msg):

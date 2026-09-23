@@ -56,6 +56,8 @@ class State:
     base_mode: int = 0
     custom_mode: int = 0
     system_status: int = 0
+    # MAV_AUTOPILOT_* from HEARTBEAT; -1 until one arrives.
+    autopilot: int = -1
     available_modes: list = field(default_factory=list)
 
     x: float = 0.0
@@ -169,9 +171,12 @@ class State:
     pitch_rate: float = 0.0
     yaw_rate: float = 0.0
 
+    # -1 means "unknown / not reported" for all three.
     battery: float = -1.0
-    voltage: float = 0.0
-    current: float = 0.0
+    voltage: float = -1.0
+    current: float = -1.0
+    # BATTERY_STATUS id being followed; -1 until one is seen.
+    battery_id: int = -1
 
     thrust: float = 0.0
 
@@ -304,8 +309,8 @@ class State:
     ekf_terrain_variance: float = 0.0
 
     rc_received: bool = False
-    rc_rssi: int = 0
-    rc_lq: int = 0
+    # Percent, -1 when the receiver doesn't report it.
+    rc_rssi: int = -1
     rc_failsafe: bool = False
     rc_channels: list = field(default_factory=lambda: [0] * 18)
     last_rc: float = 0.0
@@ -486,6 +491,10 @@ class State:
     fire_lon: float = 0.0
     fire_alt: float = 0.0
     fire_last_received: float = 0.0
+    # Other nodes publishing the fire topic, as "node (QoS)" strings, polled
+    # from the ROS graph so the map can tell "nobody publishes" apart from
+    # "published but nothing arrives".
+    fire_publishers: list = field(default_factory=list)
 
     # LiDAR point-cloud overview ([v] screen) - see lazypx4.lidar. Runs its
     # own rclpy node independent of the ROS clock's, so `lidar_supported`

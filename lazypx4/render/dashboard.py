@@ -260,7 +260,6 @@ def draw_dashboard():
 
         rc_received = state.rc_received
         rc_rssi = state.rc_rssi
-        rc_lq = state.rc_lq
         rc_failsafe = state.rc_failsafe
 
         rx_rate = state.rx_rate
@@ -515,7 +514,9 @@ def draw_dashboard():
     else:
         battery_text = GREEN + f"{battery:.0f}%" + RESET
 
-    lines.append(f"   Level: {battery_text}   Voltage: {voltage:.2f} V   Current: {current:.2f} A")
+    voltage_text = f"{voltage:.2f} V" if voltage >= 0 else "--"
+    current_text = f"{current:.2f} A" if current >= 0 else "--"
+    lines.append(f"   Level: {battery_text}   Voltage: {voltage_text}   Current: {current_text}")
 
     lines.append("")
     lines.append(ui_section("NAVIGATION / ESTIMATION"))
@@ -555,8 +556,10 @@ def draw_dashboard():
     else:
         rc_conn_text = GREEN + "CONNECTED" + RESET
 
-    rssi_color = graded_color(rc_rssi, RC_SIGNAL_GOOD, RC_SIGNAL_OK) if rc_received else DIM
-    lq_color = graded_color(rc_lq, RC_SIGNAL_GOOD, RC_SIGNAL_OK) if rc_received else DIM
+    if rc_received and rc_rssi >= 0:
+        rssi_text = graded_color(rc_rssi, RC_SIGNAL_GOOD, RC_SIGNAL_OK) + f"{rc_rssi}%" + RESET
+    else:
+        rssi_text = DIM + "--" + RESET
 
     if last_fence_status:
         fence_text = (
@@ -575,7 +578,7 @@ def draw_dashboard():
     )
     lines.append(
         f"   RC: {rc_conn_text}"
-        f"   RSSI: {rssi_color}{rc_rssi}{RESET}   LQ: {lq_color}{rc_lq}%{RESET}"
+        f"   RSSI: {rssi_text}"
         f"   Failsafe: {rc_fs}"
     )
 
