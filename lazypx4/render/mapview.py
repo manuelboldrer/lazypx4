@@ -97,6 +97,7 @@ def draw_map_screen():
         navpath_on = state.map_navpath_enabled
         navpath_pts = list(state.navpath_points) if navpath_on else []
         navpath_last = state.navpath_last_received
+        navpath_publishers = list(state.navpath_publishers)
         mapfeeds_supported = state.mapfeeds_supported
 
         fire_last = state.fire_last_received
@@ -721,8 +722,9 @@ def draw_map_screen():
             if grid[row][col] == " " or grid[row][col] == fence_char_cell:
                 grid[row][col] = BLUE + braille_glyph(bitmask) + RESET
 
-        put(navpath_pts[0][0], navpath_pts[0][1], GREEN + BOLD + "s" + RESET)
+        # A round trip ends on its start: draw `e` first so `s` stays visible.
         put(navpath_pts[-1][0], navpath_pts[-1][1], RED + BOLD + "e" + RESET)
+        put(navpath_pts[0][0], navpath_pts[0][1], GREEN + BOLD + "s" + RESET)
 
     lidar_fresh = bool(lidar_last) and (now - lidar_last) < 2.0
     lidar_drawn = 0
@@ -932,13 +934,20 @@ def draw_map_screen():
     if navpath_on:
         if not mapfeeds_supported:
             navpath_note = DIM + "no ROS 2 - path unavailable" + RESET
+        elif not navpath_last and navpath_publishers:
+            navpath_note = (
+                YELLOW + "published but nothing received yet" + RESET
+                + f" - {DIM}{', '.join(navpath_publishers)}{RESET} on {settings.navpath_topic}"
+            )
         elif not navpath_last:
-            navpath_note = YELLOW + "no path received yet" + RESET + f" on {settings.navpath_topic}"
+            navpath_note = DIM + "no publisher seen" + RESET + f" on {settings.navpath_topic}"
         else:
             age = now - navpath_last
+            closed = len(navpath_pts) >= 2 and navpath_pts[0] == navpath_pts[-1]
+            end_note = "end (= start)" if closed else "end"
             navpath_note = (
                 f"{BLUE}⣿{RESET} {len(navpath_pts)} pose(s)   {GREEN}{BOLD}s{RESET} start  "
-                f"{RED}{BOLD}e{RESET} end   {DIM}received {age:.0f}s ago (ENU map frame){RESET}"
+                f"{RED}{BOLD}e{RESET} {end_note}   {DIM}received {age:.0f}s ago (ENU map frame){RESET}"
             )
         lines.append(f" NAVPATH   {navpath_note}")
 

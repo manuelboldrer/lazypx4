@@ -9,14 +9,15 @@ frame uses, so a pose maps straight to ``(north, east) = (y, x)``. The fire
 fix is global lat/lon/alt and is projected onto the map by the renderer with
 the map's own local origin.
 
-Note the upstream node publishes the path once per plan (not latched), so this
-subscriber only sees it if it is running when that happens.
-
-The fire topic is subscribed twice, RELIABLE and BEST_EFFORT: a reliable
+Both topics are subscribed twice, RELIABLE and BEST_EFFORT: a reliable
 subscription never matches a best-effort publisher (e.g. a detector using the
 sensor-data QoS) and ROS reports nothing when that happens. A reliable
 publisher matches both, which is harmless - each message just sets the same
-fix twice.
+value twice. The path gets a third, RELIABLE + TRANSIENT_LOCAL subscription so
+a latched path published once before lazypx4 started is still delivered (a
+volatile subscriber never gets that stored message). `ros2 topic echo` adapts
+its QoS to the publisher, so it can show a topic these fixed-QoS
+subscriptions would otherwise miss.
 
 Runs its own rclpy node in its own ``rclpy.Context()``, independent of the
 other background ROS threads - see :mod:`lazypx4.lidar` for why - and uses a
@@ -40,7 +41,7 @@ try:
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.event_handler import SubscriptionEventCallbacks
     from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from sensor_msgs.msg import NavSatFix
 except Exception:
     rclpy = None
@@ -50,6 +51,7 @@ except Exception:
     SubscriptionEventCallbacks = None
     QoSProfile = None
     ReliabilityPolicy = None
+    DurabilityPolicy = None
     NavSatFix = None
 
 #: How often the fire topic's publishers are re-read from the ROS graph.
@@ -63,13 +65,15 @@ def mapfeeds_available():
     return rclpy is not None and Path is not None and NavSatFix is not None
 
 
-def _fire_publishers(node):
+def _topic_publishers(node, topic):
     publishers = []
-    for info in node.get_publishers_info_by_topic(GPS_PUBLISH_TOPIC):
+    for info in node.get_publishers_info_by_topic(topic):
         if info.node_name == _OWN_PUBLISHER_NODE:
             continue
         reliability = info.qos_profile.reliability
         qos = "best-effort" if reliability == ReliabilityPolicy.BEST_EFFORT else "reliable"
+        if info.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL:
+            qos += ", latched"
         publishers.append(f"{info.node_name} ({qos})")
     return sorted(publishers)
 
@@ -84,8 +88,13 @@ def mapfeeds_thread():
     warned = False
 
     def _on_path(msg):
-        # ENU map frame -> local (north, east).
-        points = [(p.pose.position.y, p.pose.position.x) for p in msg.poses]
+        # ENU map frame -> local (north, east). Consecutive repeats (the
+        # planner pads the path with its final pose) are dropped.
+        points = []
+        for p in msg.poses:
+            pt = (p.pose.position.y, p.pose.position.x)
+            if not points or points[-1] != pt:
+                points.append(pt)
 
         with state.lock:
             state.navpath_points = points
@@ -102,14 +111,25 @@ def mapfeeds_thread():
     try:
         rclpy.init(args=None, context=context)
         node = Node("lazypx4_mapfeeds", context=context)
-        # Default (reliable, volatile) QoS: matches the publishers' defaults.
-        node.create_subscription(Path, settings.navpath_topic, _on_path, 10)
-        # The reliable one is expected to be incompatible with best-effort
-        # publishers; replace rclpy's default handler, which would print that
-        # warning across the TUI.
+        # The reliable ones are expected to be incompatible with best-effort
+        # publishers (and the transient-local one with volatile publishers);
+        # replace rclpy's default handler, which would print that warning
+        # across the TUI.
+        quiet = SubscriptionEventCallbacks(incompatible_qos=lambda _event: None)
+        node.create_subscription(Path, settings.navpath_topic, _on_path, 10, event_callbacks=quiet)
+        node.create_subscription(
+            Path, settings.navpath_topic, _on_path,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            event_callbacks=quiet,
+        )
+        node.create_subscription(
+            Path, settings.navpath_topic, _on_path,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
         node.create_subscription(
             NavSatFix, GPS_PUBLISH_TOPIC, _on_fire, 10,
-            event_callbacks=SubscriptionEventCallbacks(incompatible_qos=lambda _event: None),
+            event_callbacks=quiet,
         )
         node.create_subscription(
             NavSatFix, GPS_PUBLISH_TOPIC, _on_fire,
@@ -128,9 +148,11 @@ def mapfeeds_thread():
             try:
                 if time.monotonic() >= next_graph_poll:
                     next_graph_poll = time.monotonic() + _GRAPH_POLL_S
-                    publishers = _fire_publishers(node)
+                    fire_publishers = _topic_publishers(node, GPS_PUBLISH_TOPIC)
+                    navpath_publishers = _topic_publishers(node, settings.navpath_topic)
                     with state.lock:
-                        state.fire_publishers = publishers
+                        state.fire_publishers = fire_publishers
+                        state.navpath_publishers = navpath_publishers
                 executor.spin_once(timeout_sec=0.2)
             except Exception as exc:
                 if not warned:

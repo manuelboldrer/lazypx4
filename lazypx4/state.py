@@ -487,6 +487,7 @@ class State:
     navpath_points: list = field(default_factory=list)
     navpath_frame_id: str = ""
     navpath_last_received: float = 0.0
+    navpath_publishers: list = field(default_factory=list)
     fire_lat: float = 0.0
     fire_lon: float = 0.0
     fire_alt: float = 0.0
