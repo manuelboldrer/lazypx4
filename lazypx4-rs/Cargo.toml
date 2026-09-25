@@ -1,0 +1,39 @@
+[package]
+name = "lazypx4-rs"
+version = "0.1.0"
+edition = "2024"
+description = "A lazygit-style terminal UI for PX4 over MAVLink (Rust / ratatui port of lazypx4)"
+license = "MIT"
+authors = ["Manuel Boldrer"]
+keywords = ["px4", "mavlink", "uav", "drone", "tui"]
+
+[dependencies]
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = "0.29.0"
+font8x8 = "0.3.1"
+futures = { version = "0.3.34", optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+libc = "0.2.189"
+# Only the codec is used (link.rs owns the UDP socket). The development
+# dialect is a superset of common with the Standard Modes messages
+# (AVAILABLE_MODES / CURRENT_MODE); extensions are needed for e.g.
+# GPS_RAW_INT.h_acc and BATTERY_STATUS.voltages_ext.
+mavlink = { version = "0.18.0", default-features = false, features = ["std", "dialect-development", "format-generated-code", "mav2-message-extensions"] }
+r2r = { version = "0.9.7", optional = true }
+ratatui = "0.30.2"
+roxmltree = "0.21.1"
+serde_json = "1.0.151"
+ureq = "3.4.2"
+xz2 = { version = "0.1.7", features = ["static"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[features]
+# ROS 2 screens ([v] LiDAR, [w] camera, map NAVPATH / FIRE overlays, [P]
+# publish, ROS clock). Needs a sourced ROS 2 install at build time; the
+# default build has no ROS dependency at all.
+ros = ["dep:r2r", "dep:futures"]
