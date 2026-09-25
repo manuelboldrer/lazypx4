@@ -1,10 +1,11 @@
 [package]
-name = "lazypx4-rs"
+name = "lazypx4"
 version = "0.1.0"
 edition = "2024"
-description = "A lazygit-style terminal UI for PX4 over MAVLink (Rust / ratatui port of lazypx4)"
+description = "A lazygit-style terminal UI for PX4 over MAVLink"
 license = "MIT"
 authors = ["Manuel Boldrer"]
+repository = "https://github.com/manuelboldrer/lazypx4"
 keywords = ["px4", "mavlink", "uav", "drone", "tui"]
 
 [dependencies]

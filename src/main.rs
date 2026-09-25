@@ -1,6 +1,6 @@
-//! lazypx4-rs: a lazygit-style terminal UI for PX4 over MAVLink.
+//! lazypx4: a lazygit-style terminal UI for PX4 over MAVLink.
 //!
-//! Rust / ratatui port of the Python `lazypx4`. Command-line entry point:
+//! Command-line entry point:
 //! parse args, then run the app on the alternate screen.
 
 mod app;
@@ -57,8 +57,9 @@ struct Cli {
     firmware_dir: String,
 
     /// Directory containing px_uploader.py / upload_log.py / ecl_ekf
-    #[arg(long, default_value = "./Tools", value_name = "DIR")]
-    tools_dir: String,
+    /// [default: ./Tools, else the Tools/ of the repo it was built from]
+    #[arg(long, value_name = "DIR")]
+    tools_dir: Option<String>,
 
     /// Load a .kml file as the map's fence/waypoint overlay on start-up
     #[arg(long, value_name = "FILE")]
@@ -85,6 +86,18 @@ struct Cli {
     use_sim_time: bool,
 }
 
+/// `./Tools` when started from the repo root, else the checkout the binary
+/// was built from (so an installed binary finds the vendored PX4 scripts
+/// from any directory).
+fn default_tools_dir() -> String {
+    let built_from = concat!(env!("CARGO_MANIFEST_DIR"), "/Tools");
+    if !std::path::Path::new("./Tools").is_dir() && std::path::Path::new(built_from).is_dir() {
+        built_from.into()
+    } else {
+        "./Tools".into()
+    }
+}
+
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
@@ -101,7 +114,7 @@ fn main() -> std::process::ExitCode {
         map_dir: cli.map_dir,
         disk_path: cli.disk_path,
         firmware_dir: cli.firmware_dir,
-        tools_dir: cli.tools_dir,
+        tools_dir: cli.tools_dir.unwrap_or_else(default_tools_dir),
         ulog_upload_server: "https://logs.px4.io".into(),
         kml_path: cli.kml,
         lidar_topic: cli.lidar_topic,

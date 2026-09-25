@@ -1,4 +1,7 @@
 .venv
+# Rust
+/target/
+
 # Python
 __pycache__/
 *.py[cod]

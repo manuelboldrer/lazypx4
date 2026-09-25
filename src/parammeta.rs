@@ -2,8 +2,7 @@
 //!
 //! The MAVLink parameter protocol only carries a name and a number. Like
 //! QGroundControl we read PX4's `parameters.json` for what the number means:
-//! a compact copy is bundled into the binary (the same
-//! `lazypx4/data/param_meta.json.xz` the Python version ships), and
+//! a compact copy (`data/param_meta.json.xz`) is bundled into the binary, and
 //! `--param-defaults FILE` can point at the exact firmware's file instead.
 //!
 //! Compact format: `{"px4": "v1.17.0", "params": {NAME: entry}}` where an
@@ -16,7 +15,7 @@ use std::io::Read;
 
 use serde_json::Value;
 
-static BUNDLED: &[u8] = include_bytes!("../../lazypx4/data/param_meta.json.xz");
+static BUNDLED: &[u8] = include_bytes!("../data/param_meta.json.xz");
 
 #[derive(Debug, Default, Clone)]
 pub struct Entry {

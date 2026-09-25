@@ -371,6 +371,6 @@ pub fn about() -> Vec<Line<'static>> {
     );
     lines.push(blank());
     lines.push(section("VERSION", ""));
-    lines.push(Line::from(format!("   lazypx4-rs {}", env!("CARGO_PKG_VERSION"))));
+    lines.push(Line::from(format!("   lazypx4 {}", env!("CARGO_PKG_VERSION"))));
     lines
 }

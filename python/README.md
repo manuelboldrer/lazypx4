@@ -1,7 +1,11 @@
-# lazypx4
+# lazypx4 (Python version)
+
+> **Legacy implementation.** The main lazypx4 is now the Rust version at the
+> [repository root](../README.md). This directory keeps the original Python
+> implementation; the commands below are run from `python/`.
 A vim-style, keyboard-only TUI for PX4 — built for headless, multi-vehicle ops.
 
-![lazypx4 demo](docs/demo.gif)
+![lazypx4 demo](../docs/demo.gif)
 
 A terminal UI for a PX4 vehicle over MAVLink, in the spirit of
 [lazygit](https://github.com/jesseduffield/lazygit) and
@@ -57,7 +61,6 @@ UDP link and gives you, from one keyboard-driven screen:
 | `f` | Flash firmware | pick a `.px4` file and a serial port, flash via `px_uploader.py` |
 | `u` | USB / network | companion-computer sanity check: USB device enumeration, Wi-Fi/Ethernet link and IP - independent of the MAVLink link |
 | `v` | LiDAR point cloud | summary + scatter view of a ROS 2 `sensor_msgs/PointCloud2` topic (e.g. Livox `/livox/points`), in the sensor's own frame; `1`/`2`/`3` switch top-down / front / oblique projection, `c` toggles a freely-rotatable camera panned/tilted with `hjkl`, `t` changes the subscribed topic |
-| `E` | EKF reset | re-initialises the estimator, behind `type YES` |
 | `?` | About | logo, author/contact, version |
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
@@ -79,17 +82,17 @@ the ones you check most, live and decoded (`EKF2_HGT_REF  GPS (1)`,
 `UXRCE_DDS_KEY`, `UXRCE_DDS_NS_IDX`). Enum parameters list every option with
 the one in force highlighted (`0 Baro  [1 GPS]  2 Range  3 Vision`) and bitmasks
 list every bit with the set ones highlighted. Edit the list in `KEY_PARAMETER_COLUMNS`
-(`src/config.rs`). On a short terminal the parameter list shrinks to make
+(`lazypx4/config.py`). On a short terminal the parameter list shrinks to make
 room, and the panel hides itself if that would leave fewer than 6 rows.
 
 **Parameter descriptions** — the MAVLink parameter protocol only carries a
 name and a number, so the meanings come from PX4's `parameters.json`, the same
-metadata QGC uses. A copy from PX4 v1.17 is compiled into the binary (`data/param_meta.json.xz`); to match
+metadata QGC uses. A copy from PX4 v1.17 is bundled (`lazypx4/data`); to match
 the exact firmware on your vehicle, point `--param-defaults` at the
 `parameters.json` from its build (e.g.
 `build/px4_fmu-v6x_default/parameters.json`, plain or `.xz`), which also
 enables the `CHANGED` view against the real defaults. Regenerate the bundled
-copy with `python/scripts/make_param_meta.py`.
+copy with `scripts/make_param_meta.py`.
 
 **Search** — on the Modes, Event log, Flight logs and Parameters screens,
 `/` opens an incremental search: matches are highlighted, the cursor jumps to
@@ -150,81 +153,71 @@ cut across a notch between two segments, so keep the area convex for now.
 **GPS publish** — `P` publishes the vehicle's current global position as a
 one-shot ROS 2 `sensor_msgs/NavSatFix` on `/fire_gps_loc`, for external
 tooling that wants the live fix on a topic (e.g. a "mark this spot"
-workflow) rather than read by hand off this screen. Needs the ROS 2 build
-(`--features ros`, below); a banner confirms success/failure.
+workflow) rather than read by hand off this screen. Needs the `ros` extra
+below; a banner confirms success/failure.
 
 ## Install
 
-lazypx4 is written in Rust ([ratatui](https://ratatui.rs) +
-[rust-mavlink](https://github.com/mavlink/rust-mavlink)). You need a Rust
-toolchain ([rustup.rs](https://rustup.rs)); then:
-
 ```bash
-git clone https://github.com/manuelboldrer/lazypx4.git
-cd lazypx4
-install/install.sh          # plain build
-# or, with the ROS 2 screens (see below):
-source /opt/ros/jazzy/setup.bash && install/install.sh --ros
+pip install .
+
+# optional: annotate the satellite snapshot with pins + a scale bar
+pip install ".[map]"
+
+# optional: the dashboard's ROS clock, the [v] LiDAR point-cloud screen and
+# the [w] camera screen (needs a sourced ROS 2 install on PYTHONPATH too -
+# see pyproject.toml)
+pip install ".[ros]"
+
+# optional: runtime deps of the standalone PX4 scripts used by [f] flash
+# firmware and the flight-logs screen's upload / EKF-health-check actions
+pip install ".[tools]"
+
+# optional: the [u] host screen's on-demand internet speed test ([i])
+pip install ".[net]"
 ```
 
-`install/install.sh` builds `target/release/lazypx4`, symlinks it to
-`~/.local/bin/lazypx4`, and creates a `.venv` with the Python dependencies
-of the vendored PX4 scripts in `Tools/` (see below) plus `speedtest-cli`
-for the `[u]` screen's speed test.
+Requires Python 3.9+ and [`pymavlink`](https://pypi.org/project/pymavlink/). Every
+extra above is optional - without it, the corresponding screen/action just
+reports "not found" instead of failing to start.
 
-### Manual build
+The `[w]` camera screen's topics can publish `sensor_msgs/CompressedImage`
+instead of raw `Image`; decoding those additionally needs Pillow (the
+`[map]` extra above).
 
-```bash
-cargo build --release
-./target/release/lazypx4
-# or install to ~/.cargo/bin:
-cargo install --path .
-```
+### Standalone binary
 
-The default build is a single ~5 MB binary that needs only glibc - no
-Python, no ROS - so you can copy it straight onto a companion computer. The
-ROS 2 screens then say they're unavailable.
+As an alternative to `pip install`, `./build_binary.sh` builds a
+standalone, single-file `lazypx4` executable with PyInstaller - it bundles
+Python and every pip dependency, so it runs without activating `.venv` or
+having Python installed system-wide - and symlinks it into
+`~/.local/bin/lazypx4` so it's on `PATH`.
 
-### With ROS 2
-
-The `[v]` LiDAR and `[w]` camera screens, the map's NAVPATH / FIRE
-overlays, `[P]` GPS publish and the dashboard's ROS clock need the `ros`
-feature:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-# optional: only generate the message types lazypx4 uses (much faster build)
-export IDL_PACKAGE_FILTER="std_msgs;sensor_msgs;nav_msgs;geometry_msgs;builtin_interfaces;rosgraph_msgs;rcl_interfaces"
-cargo build --release --features ros
-```
-
-This uses [r2r](https://github.com/sequenceplanner/r2r), which goes through
-`rcl`, so it talks over whatever RMW your sourced ROS install uses (Fast
-DDS, Cyclone, Zenoh...). The ROS build links against the ROS libraries, so
-**source ROS before running it** too. `--use-sim-time` makes the ROS clock
-follow `/clock`.
+See `install.sh` for the whole procedure (venv + every extra + binary).
 
 ### `Tools/`
 
 `[f]` flash firmware, the flight-logs screen's `[u]` web upload and `[a]`
-EKF health-check shell out to real, standalone PX4 scripts rather than
+EKF health-check all shell out to real, standalone PX4 scripts rather than
 reimplementing them - `px_uploader.py`, `upload_log.py` and
-`ecl_ekf/process_logdata_ekf.py`. This repo checks in `Tools/` as a vendored
-copy of those scripts straight from
-[PX4-Autopilot](https://github.com/PX4/PX4-Autopilot) (BSD-3-Clause, license
-kept at `Tools/LICENSE`).
-
-lazypx4 looks for them in `--tools-dir`; the default is `./Tools` if it
-exists, otherwise the `Tools/` of the checkout the binary was built from, so
-an installed binary works from any directory. The Python interpreter is
-chosen in this order: `$VIRTUAL_ENV`, then the `.venv` next to the tools
-directory, then `python3`. Their dependencies are listed in
-`Tools/requirements.txt` (`install/install.sh` installs them).
+`ecl_ekf/process_logdata_ekf.py` (plus the `ecl_ekf/analysis` and
+`ecl_ekf/plotting` modules it imports). `lazypx4` looks for them under a
+`Tools/` directory (`--tools-dir`, default `./Tools` - pass `--tools-dir ../Tools`
+when starting it from `python/`), and this repo checks
+in `Tools` (at the repo root) as a vendored copy of those scripts straight from
+[PX4-Autopilot](https://github.com/PX4/PX4-Autopilot) (BSD-3-Clause,
+license kept at `Tools/LICENSE`) - no sibling PX4-Autopilot checkout
+needed, they're used directly from this repo.
 
 To refresh them from a newer PX4-Autopilot release, copy the same files
-back in from a checkout of it, or point `--tools-dir` at a PX4-Autopilot
-checkout's `Tools/`. Without a valid `Tools/`, every other screen still
-works - `[f]`/`[u]`/`[a]` just report the script as not found.
+back in from a checkout of it (`Tools/px_uploader.py`, `Tools/upload_log.py`,
+`Tools/ecl_ekf/`) and commit the result, or point `--tools-dir` at a PX4-
+Autopilot checkout's `Tools/` directory instead of this repo's copy.
+Without a valid `Tools/`, every other screen and action still works -
+`[f]`/`[u]`/`[a]` just report the script as not found. Installing the
+`tools` extra above gets you these scripts' own runtime dependencies
+(pyserial, requests, pyulog, ...); it does not fetch the scripts
+themselves.
 
 ## Run
 
@@ -240,9 +233,6 @@ lazypx4 --camera-topic /camera/image_raw --camera-topic-2 /camera2/image_raw # [
 lazypx4 --kml mission.kml       # preload the [n] mission screen's fence/waypoint overlay
 lazypx4 --help
 ```
-
-The UI comes up immediately and shows `WAITING FOR HEARTBEAT` until a
-vehicle appears.
 
 The dashboard's **HOST** line shows the companion computer's CPU / RAM / disk
 load (Linux, read from `/proc`), and **SVC** shows whether a rosbag recording
@@ -305,46 +295,6 @@ instance through its parameters (`MAV_2_CONFIG`, `MAV_2_MODE`,
 `MAV_2_RATE`, ...) and Ethernet settings (`MAV_2_UDP_PRT`); which
 instance/params are available depends on the board and PX4 version.
 
-## Source layout
-
-```
-src/
-  main.rs          CLI
-  app.rs           session, main loop, key dispatch, prompts, actions
-  app_map.rs       keys for the map, sensor, host, firmware and log-tool screens
-  link.rs          udpin socket + rust-mavlink codec (GCS identity 255/190)
-  state.rs         shared vehicle state + event log
-  mav/             receiver + handlers, commands, params, modes, shell, calibration,
-                   flight logs, guided (goto / jog / waypoint queue / fence upload)
-  geo.rs           projections, KML parser, lawnmower coverage
-  satellite.rs     Esri snapshot + annotation + JSON sidecar
-  host.rs          CPU / RAM / disk / services, network / USB / Tailscale / speed test
-  jobs.rs          background px_uploader / upload_log / ecl_ekf jobs
-  ros.rs           r2r node (feature `ros`) or a stub
-  lineedit.rs      NSH input line with history
-  ui/              frame + one module per screen group
-```
-
-The parameter metadata is embedded from `data/param_meta.json.xz` with
-`include_bytes!`.
-
-## Implementation notes
-
-- **NSH input is edited locally and sent on ENTER** (↑/↓ history, ←/→ editing),
-  like PX4's `Tools/mavlink_shell.py` and QGC's console. Recent PX4
-  (`66f197b6ea`, "mavlink_shell: no echo of commands") makes the MAVLink shell
-  echo input itself. On SITL, `pxh` echoes it too, so forwarding every keystroke
-  showed each character twice. Exactly one echo of a sent command is kept.
-- rust-mavlink needs the `mav2-message-extensions` feature, or it silently drops
-  MAVLink 2 extension fields (GPS accuracy, dual-antenna yaw, extra battery cells).
-
-## Python version
-
-lazypx4 started as a Python application; that implementation is kept in
-[`python/`](python/) (see [`python/README.md`](python/README.md) for its
-install and usage). It is feature-equivalent but no longer the main
-version.
-
 ## Status
 
 `lazypx4` is under active testing - if you hit a bug or have an idea for an
@@ -363,5 +313,5 @@ Developed with assistance from Anthropic's Claude AI.
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT - see [LICENSE](../LICENSE).
 

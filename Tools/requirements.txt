@@ -1,0 +1,9 @@
+# Runtime deps of the vendored PX4 scripts that lazypx4 shells out to:
+# px_uploader.py ([f] flash firmware), upload_log.py (flight logs [u]) and
+# ecl_ekf/process_logdata_ekf.py (flight logs [a] EKF health check).
+pyserial>=3.5
+requests>=2.31
+six>=1.16
+pyulog>=1.0
+numpy>=1.21
+matplotlib>=3.5

@@ -46,8 +46,8 @@ pub fn running(jobs: &Jobs) -> bool {
 }
 
 /// The interpreter for a Tools/ script: an active virtualenv, the repo's
-/// `.venv` next to the tools directory (where lazypx4's `tools` extra puts
-/// pyserial / requests / pyulog), else `python3` from PATH.
+/// `.venv` next to the tools directory (where `install/install.sh` puts
+/// `Tools/requirements.txt`), else `python3` from PATH.
 fn tool_python(tools_dir: &str) -> PathBuf {
     if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
         let p = Path::new(&venv).join("bin/python");
