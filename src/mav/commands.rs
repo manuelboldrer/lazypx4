@@ -301,6 +301,26 @@ pub fn send_takeoff(link: &Link, shared: &Shared, altitude_m: f64) -> bool {
     true
 }
 
+/// Enter OFFBOARD, or leave it for HOLD (only when currently in OFFBOARD).
+pub fn send_offboard(link: &Link, shared: &Shared, enter: bool) -> bool {
+    if enter {
+        let mut st = state::lock(shared);
+        if st.mode == "OFFBOARD" {
+            st.warn("OFFBOARD ignored: already in OFFBOARD");
+            return false;
+        }
+        return set_mode(link, &mut st, "OFFBOARD");
+    }
+    {
+        let mut st = state::lock(shared);
+        if st.mode != "OFFBOARD" {
+            st.warn("EXIT OFFBOARD ignored: not in OFFBOARD");
+            return false;
+        }
+    }
+    send_hold(link, shared)
+}
+
 /// Land at the current position.
 pub fn send_land(link: &Link, shared: &Shared) -> bool {
     let mut st = state::lock(shared);

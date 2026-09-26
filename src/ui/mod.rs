@@ -10,7 +10,6 @@ mod hostui;
 mod lists;
 mod map;
 mod other;
-pub mod sensors;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -282,7 +281,7 @@ impl crate::app::Session {
 
 fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
     match screen {
-        Screen::Dashboard => (dashboard::draw(ctx), "[a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old [m]ode · TAB panels · q quit".into()),
+        Screen::Dashboard => (dashboard::draw(ctx), "[a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old o[F]fboard [m]ode · TAB panels · q quit".into()),
         Screen::ModeSelect => (lists::modes(ctx), "↑↓/jk select · ENTER set mode · [r] re-request · / search · [m] back".into()),
         Screen::Parameters => (lists::parameters(ctx), "ENTER edit · [v] ALL/CHANGED · [r] refresh · [b] reboot · / search · [p] back".into()),
         Screen::Log => (lists::event_log(ctx), "↑↓ scroll · PGUP/PGDN page · [c] clear · / search · [g] back".into()),
@@ -295,15 +294,6 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
         Screen::Calibration => (other::calibration(ctx), "[g]yro [a]ccel [l]evel [c]ompass [b]aro · [r] re-request · [s] back".into()),
         Screen::About => (other::about(), "[?] back · ESC panels".into()),
         Screen::Map => (map::draw(ctx), "j/k scroll · keys listed below the map · [n] back · ESC panels".into()),
-        Screen::PointCloud => (
-            sensors::pointcloud(ctx),
-            if ctx.app.session.cloud_view == sensors::CloudView::Free {
-                "[+]/[-] zoom · [0] reset · [hjkl] rotate · [c] fixed views · [t] topic · [v] back".into()
-            } else {
-                "[+]/[-] zoom · [0] reset · [1] top [2] front [3] 45° · [c] free camera · [t] topic · [v] back".into()
-            },
-        ),
-        Screen::Camera => (sensors::camera(ctx), "[1] topic 1 · [2] topic 2 · [b] low-bandwidth · [w] back · ESC panels".into()),
         Screen::Host => (hostui::host(ctx), "[i] speed test · [u] back · ESC panels".into()),
         Screen::Firmware => (
             hostui::firmware(ctx),

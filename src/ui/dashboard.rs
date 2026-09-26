@@ -272,6 +272,7 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
             .key("L", "land")
             .key("R", "RTL")
             .key("h", "hold")
+            .key("F", if ctx.st.mode == "OFFBOARD" { "exit offboard" } else { "offboard" })
             .key("m", "mode")
             .key("E", "EKF reset")
             .dim("goto/jog on the [n] map")
@@ -648,6 +649,6 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     lines.push(section("SCREENS", ""));
     lines.push(Line::from("   [m] MODE   [s] CALIBRATE   [n] MISSION (map, goto + jog)   [c] CONTROL"));
     lines.push(Line::from("   [p] PARAMETERS   [g] EVENT LOG   [l] FLIGHT LOGS   [t] NSH   [u] USB/NETWORK"));
-    lines.push(Line::from("   [v] LIDAR   [w] CAMERA   [f] FLASH FIRMWARE   [?] ABOUT   [q] EXIT   [TAB] panels"));
+    lines.push(Line::from("   [f] FLASH FIRMWARE   [?] ABOUT   [q] EXIT   [TAB] panels"));
     lines
 }

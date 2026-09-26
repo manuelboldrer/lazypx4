@@ -26,8 +26,6 @@ pub enum Screen {
     Log,
     FlightLogs,
     Shell,
-    PointCloud,
-    Camera,
     Host,
     Control,
     Calibration,
@@ -45,8 +43,6 @@ pub const NAV_ITEMS: &[(Screen, &str, Option<char>)] = &[
     (Screen::Log, "EVENT LOG", Some('g')),
     (Screen::FlightLogs, "FLIGHT LOGS", Some('l')),
     (Screen::Shell, "NSH SHELL", Some('t')),
-    (Screen::PointCloud, "LIDAR POINTS", Some('v')),
-    (Screen::Camera, "CAMERA", Some('w')),
     (Screen::Host, "USB / NETWORK", Some('u')),
     (Screen::Control, "CONTROL", Some('c')),
     (Screen::Calibration, "CALIBRATE", Some('s')),
@@ -64,9 +60,7 @@ impl Screen {
             Screen::Firmware => "PX4 FIRMWARE FLASH",
             Screen::Parameters => "PX4 PARAMETERS",
             Screen::Control => "PX4 CONTROL / SETPOINTS · RC",
-            Screen::Camera => "ROS CAMERA PREVIEW",
             Screen::Map => "PX4 MISSION · plan view, up = North",
-            Screen::PointCloud => "LIDAR POINT CLOUD OVERVIEW",
             Screen::Calibration => "PX4 SENSOR CALIBRATION",
             Screen::Shell => "PX4 MAVLINK SHELL · NSH",
             Screen::Host => "HOST · USB / NETWORK",
@@ -101,6 +95,8 @@ pub enum Action {
     Takeoff(f64),
     Land,
     Rtl,
+    /// true: switch to OFFBOARD; false: leave it for HOLD.
+    Offboard(bool),
     SetMode(ModeOption),
     SetParam(String, f64),
     Calibrate(&'static str),
@@ -132,7 +128,6 @@ pub enum InputKind {
     Kml,
     WpQueue,
     Coverage,
-    CameraTopic(usize),
     LidarTopic,
 }
 
@@ -179,13 +174,6 @@ pub struct Session {
     pub jog_step: f64,
     pub jog_last: f64,
 
-    /// [v] point-cloud view.
-    pub cloud_view: crate::ui::sensors::CloudView,
-    pub cloud_prev_view: crate::ui::sensors::CloudView,
-    pub cloud_range: f64,
-    pub cloud_yaw: f64,
-    pub cloud_pitch: f64,
-
     /// [f] flash-firmware lists.
     pub firmware_files: Vec<std::path::PathBuf>,
     pub firmware_index: usize,
@@ -220,11 +208,6 @@ impl Session {
             jog_armed: false,
             jog_step: JOG_STEP_M,
             jog_last: 0.0,
-            cloud_view: crate::ui::sensors::CloudView::Top,
-            cloud_prev_view: crate::ui::sensors::CloudView::Top,
-            cloud_range: 10.0,
-            cloud_yaw: 45.0,
-            cloud_pitch: 30.0,
             firmware_files: Vec::new(),
             firmware_index: 0,
             firmware_ports: Vec::new(),
@@ -296,13 +279,13 @@ const STARTUP_NOTES: &[&str] = &[
     "Console ready",
     "ARM/DISARM are explicit commands",
     "Heartbeat is authoritative for actual ARM state",
-    "[T] takeoff  [L] land  [R] return-to-launch  (or pick the mode with [m])",
+    "[T] takeoff  [L] land  [R] return-to-launch  [F] offboard on/off  (or pick the mode with [m])",
     "Use [m] MODE for all other PX4 flight-mode changes",
     "Press [p] for PX4 parameters ([/] to search)",
     "Press [c] control/setpoints, [s] sensor calibration",
     "Press [l] for PX4 flight logs, [t] for the NSH shell",
     "Press [n] for the mission map: goto, jog, KML overlay, waypoint queue, fence upload",
-    "Press [u] for USB / network, [f] to flash firmware, [v] / [w] for LiDAR / camera",
+    "Press [u] for USB / network, [f] to flash firmware",
 ];
 
 /// Default climb for [T] takeoff, matching PX4's MIS_TAKEOFF_ALT default.
@@ -527,7 +510,6 @@ impl App {
                     InputKind::Kml => self.load_kml(&input.buffer),
                     InputKind::WpQueue => self.wp_queue_submit(&input.buffer),
                     InputKind::Coverage => self.coverage_submit(&input.buffer),
-                    InputKind::CameraTopic(slot) => self.camera_topic_submit(slot, &input.buffer),
                     InputKind::LidarTopic => self.lidar_topic_submit(&input.buffer),
                 }
             }
@@ -669,6 +651,9 @@ impl App {
             }
             Action::Rtl => {
                 commands::send_rtl(link, shared);
+            }
+            Action::Offboard(enter) => {
+                commands::send_offboard(link, shared, enter);
             }
             Action::SetMode(option) => modes::confirm_mode_option(link, shared, &option),
             Action::SetParam(name, value) => {
@@ -985,8 +970,6 @@ impl App {
 
         match self.session.screen {
             Screen::Map => self.handle_map_key(key),
-            Screen::PointCloud => self.handle_pointcloud_key(&key),
-            Screen::Camera => self.handle_camera_key(&key),
             Screen::Host => self.handle_host_key(&key),
             Screen::Firmware => self.handle_firmware_key(&key),
             Screen::Parameters => self.handle_parameter_key(&key),
@@ -1078,6 +1061,17 @@ impl App {
             "T" => self.open_takeoff_input(),
             "L" => self.request_confirmation("LAND here? Type YES", Action::Land),
             "R" => self.request_confirmation("RETURN TO LAUNCH? Type YES", Action::Rtl),
+            // Toggle: enter OFFBOARD, or leave it (to HOLD) if already in it.
+            "F" => {
+                if state::lock(&self.shared).mode == "OFFBOARD" {
+                    self.request_confirmation("EXIT OFFBOARD (switch to HOLD)? Type YES", Action::Offboard(false));
+                } else {
+                    self.request_confirmation(
+                        "Switch to OFFBOARD? PX4 rejects it unless setpoints are already streaming. Type YES",
+                        Action::Offboard(true),
+                    );
+                }
+            }
             "E" => self.request_confirmation("RESET EKF (ekf stop / ekf start)? Type YES", Action::EkfReset),
             "K" => self.request_confirmation(
                 "KILL motors NOW? This force-stops motors immediately, even in flight - NOT the same as disarm. Type YES",

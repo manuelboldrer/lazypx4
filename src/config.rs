@@ -32,7 +32,6 @@ pub struct Settings {
     /// ROS 2 topics (only used by a `--features ros` build).
     pub lidar_topic: String,
     pub navpath_topic: String,
-    pub camera_topics: [String; 2],
     #[cfg_attr(not(feature = "ros"), allow(dead_code))]
     pub use_sim_time: bool,
 }
@@ -396,8 +395,6 @@ pub const MAP_IMAGE_MIN_SPAN_M: f64 = 120.0;
 pub const MAP_IMAGE_PAD: f64 = 1.8;
 pub const MAP_DOWNLOAD_TIMEOUT_S: u64 = 25;
 
-pub const LIDAR_CAM_ROTATE_STEP: f64 = 5.0;
-pub const CAMERA_LOW_BW_MAX_COLS: usize = 48;
 
 pub const WIFI_SIGNAL_GOOD: f64 = 60.0;
 pub const WIFI_SIGNAL_OK: f64 = 30.0;

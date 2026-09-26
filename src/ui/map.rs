@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 
 use super::*;
 use crate::geo;
-use crate::state::{Target, now};
+use crate::state::{LidarFrame, Target, now};
 
 pub const BRAILLE_BITS: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
@@ -58,24 +58,35 @@ struct Cell {
     layer: Layer,
 }
 
+/// Height of a terminal row in column widths; a Braille dot is then square.
+pub const CELL_ASPECT: f64 = 2.0;
+
+/// North half-extent / East half-extent of a `w` x `h` grid drawn to scale.
+fn n_over_e(w: usize, h: usize) -> f64 {
+    (h / 2) as f64 * CELL_ASPECT / ((w / 2) as f64).max(1.0)
+}
+
 /// A character grid over the local N/E plane, with Braille sub-cells.
+/// Drawn to scale: `range` is the East half-extent, `range_n` the North one.
 struct Grid {
     w: usize,
     h: usize,
     cells: Vec<Cell>,
     center: (f64, f64),
     range: f64,
+    range_n: f64,
 }
 
 impl Grid {
     fn new(w: usize, h: usize, center: (f64, f64), range: f64) -> Self {
-        Grid { w, h, cells: vec![Cell { ch: ' ', style: Style::new(), layer: Layer::Empty }; w * h], center, range }
+        let range_n = range * n_over_e(w, h);
+        Grid { w, h, cells: vec![Cell { ch: ' ', style: Style::new(), layer: Layer::Empty }; w * h], center, range, range_n }
     }
 
     fn cell_of(&self, n: f64, e: f64) -> Option<(usize, usize)> {
         let (hw, hh) = ((self.w / 2) as f64, (self.h / 2) as f64);
         let col = ((e - self.center.1) / self.range * hw).round() + hw;
-        let row = hh - ((n - self.center.0) / self.range * hh).round();
+        let row = hh - ((n - self.center.0) / self.range_n * hh).round();
         (col.is_finite() && row.is_finite() && col >= 0.0 && row >= 0.0 && (col as usize) < self.w && (row as usize) < self.h)
             .then_some((row as usize, col as usize))
     }
@@ -98,7 +109,7 @@ impl Grid {
     fn dot_of(&self, n: f64, e: f64) -> Option<(usize, usize)> {
         let (dw, dh) = ((self.w * 2) as f64, (self.h * 4) as f64);
         let col = ((e - self.center.1) / self.range * dw / 2.0).round() + dw / 2.0;
-        let row = dh / 2.0 - ((n - self.center.0) / self.range * dh / 2.0).round();
+        let row = dh / 2.0 - ((n - self.center.0) / self.range_n * dh / 2.0).round();
         (col.is_finite() && row.is_finite() && col >= 0.0 && row >= 0.0 && col < dw && row < dh).then_some((row as usize, col as usize))
     }
 
@@ -117,7 +128,7 @@ impl Grid {
 
     /// Densely sample a polyline into Braille dots.
     fn braille_polyline(&self, pts: &[(f64, f64)]) -> HashMap<(usize, usize), (u8, f64)> {
-        let dot = (self.range / (self.w.max(self.h * 2) as f64)).max(0.001);
+        let dot = (self.range / self.w.max(1) as f64).max(0.001);
         let samples = pts.windows(2).flat_map(|seg| {
             let ((an, ae), (bn, be)) = (seg[0], seg[1]);
             let steps = ((bn - an).hypot(be - ae) / dot).clamp(1.0, 2000.0) as usize;
@@ -169,8 +180,8 @@ fn wrap_keys(keys: &[&str], width: usize, sep: &str) -> Vec<String> {
 
 const MAP_KEYS: &[&str] = &[
     "[g] goto", "[W] wp queue", "[C] coverage", "[P] publish gps", "[x] jog", "[o] load kml",
-    "[O] upload fence", "[+]/[-] zoom", "[0] reset", "[f] fit kml", "[t] trail", "[c] clear",
-    "[V] lidar", "[N] navpath", "[i] sat", "[n] back", "ESC panels",
+    "[O] upload fence", "[+]/[-] zoom", "[arrows] pan", "[u] follow", "[0] reset", "[f] fit kml", "[t] trail", "[c] clear",
+    "[V] lidar", "[B] lidar frame", "[N] navpath", "[i] sat", "[n] back", "ESC panels",
 ];
 
 fn baseline_text(m: f64) -> String {
@@ -466,6 +477,8 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     geometry.extend(fire_local);
     geometry.retain(in_range);
 
+    // To scale: a North extent needs 1/k times the East half-range.
+    let k = n_over_e(grid_w, grid_h);
     let (center, range) = if st.map_fit_kml && !geometry.is_empty() {
         // [f]: centre on the geometry (plus the live markers) itself.
         let mut all = vec![(lx, ly)];
@@ -475,13 +488,17 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         let (n0, n1) = all.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
         let (e0, e1) = all.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
         let c = ((n0 + n1) / 2.0, (e0 + e1) / 2.0);
-        let r = all.iter().map(|p| (p.0 - c.0).abs().max((p.1 - c.1).abs())).fold(0.0, f64::max) * 1.08;
+        let r = all.iter().map(|p| ((p.0 - c.0).abs() / k).max((p.1 - c.1).abs())).fold(0.0, f64::max) * 1.08;
         (c, r.max(2.0))
+    } else if st.map_follow || st.map_pan != (0.0, 0.0) {
+        // [u] follow and/or arrow-key pan: a plain window at the set range.
+        let base = if st.map_follow { (lx, ly) } else { (0.0, 0.0) };
+        ((base.0 + st.map_pan.0, base.1 + st.map_pan.1), st.map_range.max(2.0))
     } else {
         // Origin-centred; the range always reaches the vehicle, GNSS fix,
         // setpoint and (nearby) KML geometry.
         let mut r = st.map_range;
-        let mut reach = |p: (f64, f64)| r = r.max(p.0.abs() * 1.08).max(p.1.abs() * 1.08);
+        let mut reach = |p: (f64, f64)| r = r.max(p.0.abs() / k * 1.08).max(p.1.abs() * 1.08);
         reach((lx, ly));
         target.into_iter().chain(gps_local).chain(geometry.iter().copied()).for_each(&mut reach);
         ((0.0, 0.0), r.max(2.0))
@@ -489,6 +506,7 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
 
     let mut grid = Grid::new(grid_w, grid_h, center, range);
     let (hw, hh) = ((grid_w / 2) as f64, (grid_h / 2) as f64);
+    let range_n = grid.range_n;
     let dim = Style::new().add_modifier(Modifier::DIM);
 
     // Axes through the local origin.
@@ -496,7 +514,7 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         grid.put(0.0, center.1 + (c as f64 - hw) / hw * range, '─', Style::new(), Layer::Axis, &[Layer::Empty]);
     }
     for r in 0..grid_h {
-        grid.put(center.0 + (hh - r as f64) / hh * range, 0.0, '│', Style::new(), Layer::Axis, &[Layer::Empty, Layer::Axis]);
+        grid.put(center.0 + (hh - r as f64) / hh * range_n, 0.0, '│', Style::new(), Layer::Axis, &[Layer::Empty, Layer::Axis]);
     }
     grid.put(0.0, 0.0, '┼', Style::new(), Layer::Axis, &[]);
 
@@ -535,13 +553,18 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         grid.marker(s.0, s.1, 's', bold(GREEN));
     }
 
-    // LiDAR scan: sensor frame (x fwd, y left) rotated by yaw onto the
-    // vehicle; assumes a centred, body-aligned mount. Lowest priority.
+    // LiDAR scan, lowest priority. Body frame (x fwd, y left): rotated by
+    // yaw and placed at the vehicle, assuming a centred, body-aligned mount.
+    // World frame (ENU map/odom): x east, y north, drawn as-is.
     let lidar_fresh = ros.lidar_last > 0.0 && t - ros.lidar_last < 2.0;
     let (z_lo, z_hi) = ros.lidar_points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p[2]), b.max(p[2])));
+    let lidar_frame = st.map_lidar_frame;
     if st.map_lidar_enabled && lidar_fresh {
         let (c, s) = (st.yaw.to_radians().cos(), st.yaw.to_radians().sin());
-        let pts = ros.lidar_points.iter().map(|p| (lx + p[0] * c + p[1] * s, ly + p[0] * s - p[1] * c, p[2]));
+        let world = lidar_frame == LidarFrame::World;
+        let pts = ros.lidar_points.iter().map(|p| {
+            if world { (p[1], p[0], p[2]) } else { (lx + p[0] * c + p[1] * s, ly + p[0] * s - p[1] * c, p[2]) }
+        });
         let cells = grid.braille_points(pts);
         grid.paint_braille(cells, |z| Style::new().fg(band_color(z, z_lo, z_hi)), Layer::Trail, &[Layer::Empty]);
     }
@@ -573,8 +596,12 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     grid.marker(lx, ly, heading_arrow(st.yaw), bold(GREEN));
 
     let mut header = Ln::new()
-        .raw(format!(" range +/-{range:6.1} m      "))
-        .dim(format!("cell ~ {:4.1} m x {:4.1} m", range / hw, range / hh));
+        .raw(format!(" range E +/-{range:.1} m  N +/-{range_n:.1} m      "))
+        .dim(format!("cell ~ {:4.1} m x {:4.1} m (to scale)", range / hw, range_n / hh));
+    if !st.map_fit_kml && (st.map_follow || st.map_pan != (0.0, 0.0)) {
+        let what = if st.map_follow { "[u] follow" } else { "panned" };
+        header = header.raw("   ").fg(what, GREEN).raw(format!("  centre N {:+.1} E {:+.1}", center.0, center.1));
+    }
     if st.map_fit_kml {
         header = if geometry.is_empty() {
             header.raw("   ").dim("[f] fit:kml (no geometry loaded)")
@@ -705,7 +732,12 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
             for c in BANDS {
                 l = l.fg("█", c);
             }
-            l.raw(format!(" {z_hi:.1} m   ")).dim("sensor assumed at vehicle centre, rotated by yaw")
+            let how = match lidar_frame {
+                LidarFrame::World => "world ENU, drawn as-is",
+                LidarFrame::Body => "robot frame, at vehicle, rotated by yaw",
+            };
+            let frame = if ros.lidar_frame_id.is_empty() { "--" } else { &ros.lidar_frame_id };
+            l.raw(format!(" {z_hi:.1} m   ")).dim(format!("frame {frame} -> [B] {how}"))
         };
         lines.push(Ln::new().raw(" LIDAR     ").spans(note.0).line());
     }

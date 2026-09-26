@@ -65,21 +65,13 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     kml: Option<String>,
 
-    /// ROS 2 sensor_msgs/PointCloud2 topic for the [v] screen
+    /// ROS 2 sensor_msgs/PointCloud2 topic for the map's [V] LiDAR overlay
     #[arg(long, default_value = "/livox/points", value_name = "TOPIC")]
     lidar_topic: String,
 
     /// ROS 2 nav_msgs/Path topic (ENU map frame) for the map's [N] overlay
     #[arg(long, default_value = "/navsat_utm_path", value_name = "TOPIC")]
     navpath_topic: String,
-
-    /// ROS 2 Image / CompressedImage topic for the [w] screen's first slot
-    #[arg(long, default_value = "/camera/image_raw", value_name = "TOPIC")]
-    camera_topic: String,
-
-    /// A second camera topic, shown alongside the first
-    #[arg(long, default_value = "", value_name = "TOPIC")]
-    camera_topic_2: String,
 
     /// Use /clock (simulation time) for the ROS clock
     #[arg(long)]
@@ -119,7 +111,6 @@ fn main() -> std::process::ExitCode {
         kml_path: cli.kml,
         lidar_topic: cli.lidar_topic,
         navpath_topic: cli.navpath_topic,
-        camera_topics: [cli.camera_topic, cli.camera_topic_2],
         use_sim_time: cli.use_sim_time,
     };
 

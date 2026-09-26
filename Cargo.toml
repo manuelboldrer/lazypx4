@@ -34,7 +34,7 @@ codegen-units = 1
 strip = true
 
 [features]
-# ROS 2 screens ([v] LiDAR, [w] camera, map NAVPATH / FIRE overlays, [P]
+# ROS 2 features (map LiDAR / NAVPATH / FIRE overlays, [P]
 # publish, ROS clock). Needs a sourced ROS 2 install at build time; the
 # default build has no ROS dependency at all.
 ros = ["dep:r2r", "dep:futures"]

@@ -1,0 +1,6 @@
+# The ROS 2 build (`--features ros`) generates r2r's message bindings from
+# the sourced ROS install. Pin the packages lazypx4 needs here so the build
+# doesn't depend on the shell: an exported but empty IDL_PACKAGE_FILTER would
+# otherwise make r2r skip rosgraph_msgs / sensor_msgs and fail to compile.
+[env]
+IDL_PACKAGE_FILTER = { value = "std_msgs;sensor_msgs;nav_msgs;geometry_msgs;builtin_interfaces;rosgraph_msgs;rcl_interfaces", force = true }

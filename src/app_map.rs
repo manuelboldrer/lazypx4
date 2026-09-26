@@ -1,5 +1,5 @@
 //! Key handling for the mission map (goto, jog, KML, waypoint queue,
-//! coverage, fence upload, satellite, GPS publish), the ROS sensor screens,
+//! coverage, fence upload, satellite, GPS publish, LiDAR topic),
 //! USB / network, flash firmware and the flight-log tool jobs. Mirrors the
 //! corresponding parts of `navigation.py`.
 
@@ -9,7 +9,6 @@ use crate::geo;
 use crate::host::lock;
 use crate::mav::guided;
 use crate::state::{self, Target, now};
-use crate::ui::sensors::CloudView;
 
 /// Trailing word that turns on "stop and face each target" for a queue.
 const FACE_WORDS: &[&str] = &["heading", "hdg", "face", "yaw"];
@@ -39,6 +38,20 @@ impl App {
             _ => {}
         }
         if self.session.jog_armed && self.jog_key(&key) {
+            return;
+        }
+        // Arrow keys pan the map (j/k / PgUp / PgDn still scroll the page).
+        if let "UP" | "DOWN" | "LEFT" | "RIGHT" = key.as_str() {
+            let mut st = state::lock(&self.shared);
+            let step = st.map_range / 4.0;
+            let (dn, de) = match key.as_str() {
+                "UP" => (step, 0.0),
+                "DOWN" => (-step, 0.0),
+                "LEFT" => (0.0, -step),
+                _ => (0.0, step),
+            };
+            st.map_pan = (st.map_pan.0 + dn, st.map_pan.1 + de);
+            st.map_fit_kml = false;
             return;
         }
         let key = if self.session.jog_armed { key } else { normalize_vim_key(key) };
@@ -77,10 +90,23 @@ impl App {
             }
             "+" | "=" => st.map_range = (st.map_range / 1.5).clamp(2.0, MAP_RANGE_MAX_M),
             "-" | "_" => st.map_range = (st.map_range * 1.5).clamp(2.0, MAP_RANGE_MAX_M),
-            "0" => st.map_range = 30.0,
+            "0" => {
+                st.map_range = 30.0;
+                st.map_pan = (0.0, 0.0);
+            }
+            "u" => {
+                st.map_follow = !st.map_follow;
+                st.map_pan = (0.0, 0.0);
+            }
+            "B" => st.map_lidar_frame = st.map_lidar_frame.next(),
             "t" => st.map_trail_enabled = !st.map_trail_enabled,
             "f" => st.map_fit_kml = !st.map_fit_kml,
             "V" => st.map_lidar_enabled = !st.map_lidar_enabled,
+            "v" => {
+                drop(st);
+                let current = lock(&self.ros).lidar_topic.clone();
+                self.request_input(format!("Point-cloud topic (current: {current}):"), InputKind::LidarTopic);
+            }
             "N" => st.map_navpath_enabled = !st.map_navpath_enabled,
             "c" => st.position_trail.clear(),
             "r" => {
@@ -444,44 +470,8 @@ impl App {
     }
 
     // -----------------------------------------------------------------
-    // ROS sensor screens
+    // ROS topics
     // -----------------------------------------------------------------
-
-    pub(crate) fn handle_pointcloud_key(&mut self, key: &str) {
-        let s = &mut self.session;
-        match key {
-            "v" => s.screen = Screen::Dashboard,
-            "ESC" => self.focus_sidebar(),
-            "+" | "=" => s.cloud_range = (s.cloud_range / 1.5).clamp(1.0, 200.0),
-            "-" | "_" => s.cloud_range = (s.cloud_range * 1.5).clamp(1.0, 200.0),
-            "0" => s.cloud_range = 10.0,
-            "1" => s.cloud_view = CloudView::Top,
-            "2" => s.cloud_view = CloudView::Front,
-            "3" => s.cloud_view = CloudView::Oblique,
-            "c" => {
-                if s.cloud_view == CloudView::Free {
-                    s.cloud_view = s.cloud_prev_view;
-                } else {
-                    s.cloud_prev_view = s.cloud_view;
-                    s.cloud_view = CloudView::Free;
-                }
-            }
-            // hjkl rotate the free camera (j/k arrive normalised).
-            "h" | "l" | "UP" | "DOWN" if s.cloud_view == CloudView::Free => match key {
-                "h" => s.cloud_yaw = (s.cloud_yaw - LIDAR_CAM_ROTATE_STEP).rem_euclid(360.0),
-                "l" => s.cloud_yaw = (s.cloud_yaw + LIDAR_CAM_ROTATE_STEP).rem_euclid(360.0),
-                "UP" => s.cloud_pitch = (s.cloud_pitch + LIDAR_CAM_ROTATE_STEP).clamp(-90.0, 90.0),
-                _ => s.cloud_pitch = (s.cloud_pitch - LIDAR_CAM_ROTATE_STEP).clamp(-90.0, 90.0),
-            },
-            "t" => {
-                let current = lock(&self.ros).lidar_topic.clone();
-                self.request_input(format!("Point-cloud topic (current: {current}):"), InputKind::LidarTopic);
-            }
-            _ => {
-                self.scroll_main(key);
-            }
-        }
-    }
 
     fn normalize_topic(text: &str) -> String {
         let t = text.trim();
@@ -495,42 +485,6 @@ impl App {
         }
         lock(&self.ros).lidar_topic = topic.clone();
         state::lock(&self.shared).command(format!("Point-cloud topic changed to {topic}"));
-    }
-
-    pub(crate) fn camera_topic_submit(&mut self, slot: usize, text: &str) {
-        let topic = Self::normalize_topic(text);
-        lock(&self.ros).cameras[slot].topic = topic.clone();
-        state::lock(&self.shared).command(format!(
-            "Camera {} topic changed to {}",
-            slot + 1,
-            if topic.is_empty() { "(none)" } else { &topic }
-        ));
-    }
-
-    pub(crate) fn handle_camera_key(&mut self, key: &str) {
-        match key {
-            "w" => self.session.screen = Screen::Dashboard,
-            "ESC" => self.focus_sidebar(),
-            "1" | "2" => {
-                let slot = if key == "1" { 0 } else { 1 };
-                let current = lock(&self.ros).cameras[slot].topic.clone();
-                self.request_input(
-                    format!(
-                        "Camera {} topic (current: {}, blank to clear):",
-                        slot + 1,
-                        if current.is_empty() { "unset" } else { &current }
-                    ),
-                    InputKind::CameraTopic(slot),
-                );
-            }
-            "b" => {
-                let mut r = lock(&self.ros);
-                r.camera_low_bw = !r.camera_low_bw;
-            }
-            _ => {
-                self.scroll_main(key);
-            }
-        }
     }
 
     // -----------------------------------------------------------------

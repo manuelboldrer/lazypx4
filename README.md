@@ -16,11 +16,11 @@ Beyond MAVLink
 
 lazypx4 doesn't stop at telemetry:
 
-[v] LiDAR / [w] camera — live ROS 2 visualization (PointCloud2, Image/CompressedImage) alongside flight state
+[n] mission map — live ROS 2 LiDAR (PointCloud2) overlay placed at the vehicle, alongside flight state
 [u] companion computer — CPU/RAM/disk load, USB enumeration, Wi-Fi/Ethernet link
 HOST/SVC dashboard lines — is rosbag running? Is Zenoh up? Is the uXRCE-DDS agent alive?
 
-Vehicle state, sensor feeds, and companion-computer health on one screen make it a genuinely useful preflight check — arming, GPS, EKF status, camera/LiDAR feeds, and system health, all glanceable before takeoff.
+Vehicle state, sensor feeds, and companion-computer health on one screen make it a genuinely useful preflight check — arming, GPS, EKF status, LiDAR feed, and system health, all glanceable before takeoff.
 
 Why
 Zero setup — sensible defaults, works out of the box
@@ -42,6 +42,7 @@ UDP link and gives you, from one keyboard-driven screen:
 | `T` / `L` / `R` | Takeoff / land / RTL | `NAV_TAKEOFF` (prompts for altitude) / `NAV_LAND` / `RETURN_TO_LAUNCH` |
 | `m` | Flight modes | legacy modes **and** PX4 v1.15+ Standard Modes (custom / PX4-ROS2 external) |
 | `h` | Hold | HOLD-family mode, or `DO_PAUSE_CONTINUE` |
+| `F` | Offboard on / off | toggle: switches to `OFFBOARD`, or - when already in it - leaves it for HOLD; PX4 rejects the switch unless offboard setpoints are already streaming (e.g. from a ROS 2 node) |
 | `K` | Kill | `MAV_CMD_DO_FLIGHTTERMINATION` - force-stops motors immediately, even in flight; not the same as disarm |
 | `H` | Set home | `MAV_CMD_DO_SET_HOME` - marks the current position as home |
 | `G` | Geofence action | Sets the `GF_ACTION` parameter (`n`one/`w`arning/`h`old/`r`eturn/`t`erminate) - PX4 has no runtime enable/disable command (it answers `MAV_CMD_DO_FENCE_ENABLE` `UNSUPPORTED`), so this is PX4's real mechanism; breach shown on the dashboard from `FENCE_STATUS` |
@@ -49,20 +50,18 @@ UDP link and gives you, from one keyboard-driven screen:
 | `p` | Parameters | browse, filter (`/`), edit, `ALL` / `CHANGED` view, reboot; like QGC, each value shows what it means (enum label, set bitmask bits, unit) plus a description / allowed values / range block for the selected one - e.g. `EKF2_HGT_REF 1` -> `GPS`, with `0 = Barometric pressure  1 = GPS  2 = Range sensor  3 = Vision` |
 | (home) | Dashboard | the default screen; its **NAVIGATION / ESTIMATION** section shows GPS fix, sats, HDOP/VDOP, EPH/EPV (horizontal/vertical accuracy, metres), RTK state, the global position as latitude / longitude (degrees) / altitude (AMSL, metres), EKF health verdict and estimator position accuracy, home and fence status, RC link |
 | `c` / `r` | Control / RC | attitude / rate / position / velocity setpoints, guidance; RC connection, RSSI/LQ/failsafe, stick-position visualisation for CH1-4 (roll/pitch/throttle/yaw) plus a bar graph for every raw `RC_CHANNELS` value; wind estimate (`WIND_COV`); raw actuator outputs (`SERVO_OUTPUT_RAW`) |
-| `w` | Camera preview | up to two ROS 2 `sensor_msgs/Image`/`CompressedImage` topics shown at once - `1`/`2` set each slot's topic (blank clears it), `b` toggles a low-bandwidth ASCII-only render for slow links |
-| `n` | Mission | (sidebar entry right below Dashboard) ASCII plan view with trail, current flight mode and armed state at the top; EKF local arrow + GNSS `⊕` overlaid with their offset, home marker, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); an **ALTITUDE** check that compares the EKF's AMSL altitude with the KML's site altitude (mean of the non-zero altitudes in the file), the EKF's local `-D` against its global altitude above the local origin, and the downward rangefinder - each with a green/yellow/red offset; `g` = goto (`f` / `fire` flies over the last `/fire_gps_loc` fix at the current altitude, `f <alt MSL>` to set one), `x` = keyboard jog, `o` = load a `.kml` file's fence polygon + waypoints as a visualization overlay (view-only, never uploaded on its own) - each waypoint's local N/E and global lat/lon/alt are listed below the grid, `O` = upload the loaded fence polygon to the vehicle for real (MAVLink mission protocol, `mission_type=FENCE`) so PX4 actually enforces it, `f` = fit the map range to the loaded KML overlay, `V` = overlay the latest LiDAR scan (the `--lidar-topic` cloud) on the plan view, rotated by the vehicle's yaw - assumes the sensor sits at the vehicle centre with x forward / y left, since the real mount isn't known, `N` = overlay the ROS planned path (`--navpath-topic`, `nav_msgs/Path` in the ENU map frame, `/navsat_utm_path` by default) as blue dots with `s`/`e` at its ends - the path is published once per plan, so lazypx4 must already be running to receive it; a fix published on `/fire_gps_loc` (e.g. the UAV's own detection, or `P`) is always drawn as a red `F` with its local N/E and the fire's position relative to the vehicle in NED (N/E/D, D positive = fire below the UAV) plus 3-D distance listed below the grid (the topic is subscribed both reliable and best-effort, so a detector using sensor-data QoS is received too; with no fix yet the line shows whether any publisher is seen), `W` = fly the KML waypoints (`3` / `seq` / `rand 8`, optional `heading`), `C` = lawnmower coverage of its polygon (`5`, `5 90`), `P` = one-shot publish the vehicle's current position as a ROS 2 `sensor_msgs/NavSatFix`, `i` saves a satellite snapshot (the loaded `.kml` overlay is drawn onto it too, if one is loaded) |
+| `n` | Mission | (sidebar entry right below Dashboard) ASCII plan view (drawn to scale, up = North) with trail, current flight mode and armed state at the top; EKF local arrow + GNSS `⊕` overlaid with their offset, home marker, GNSS/RTK read-out (fix, EPH/EPV, correction rate/age, base-station distance); an **ALTITUDE** check that compares the EKF's AMSL altitude with the KML's site altitude (mean of the non-zero altitudes in the file), the EKF's local `-D` against its global altitude above the local origin, and the downward rangefinder - each with a green/yellow/red offset; `g` = goto (`f` / `fire` flies over the last `/fire_gps_loc` fix at the current altitude, `f <alt MSL>` to set one), `x` = keyboard jog, `o` = load a `.kml` file's fence polygon + waypoints as a visualization overlay (view-only, never uploaded on its own) - each waypoint's local N/E and global lat/lon/alt are listed below the grid, `O` = upload the loaded fence polygon to the vehicle for real (MAVLink mission protocol, `mission_type=FENCE`) so PX4 actually enforces it, `f` = fit the map range to the loaded KML overlay, arrow keys = pan the view, `u` = follow the vehicle (on by default; off = centred on the local origin), `0` = reset zoom and pan, `V` = overlay the latest LiDAR scan (the `--lidar-topic` cloud, `v` changes the topic) on the plan view, `B` = the cloud's frame: robot frame (default - x forward / y left, rotated by the vehicle's yaw and placed at its position; assumes a centred, level mount) or an already-registered ENU world frame (`map`/`odom`) drawn as-is, `N` = overlay the ROS planned path (`--navpath-topic`, `nav_msgs/Path` in the ENU map frame, `/navsat_utm_path` by default) as blue dots with `s`/`e` at its ends - the path is published once per plan, so lazypx4 must already be running to receive it; a fix published on `/fire_gps_loc` (e.g. the UAV's own detection, or `P`) is always drawn as a red `F` with its local N/E and the fire's position relative to the vehicle in NED (N/E/D, D positive = fire below the UAV) plus 3-D distance listed below the grid (the topic is subscribed both reliable and best-effort, so a detector using sensor-data QoS is received too; with no fix yet the line shows whether any publisher is seen), `W` = fly the KML waypoints (`3` / `seq` / `rand 8`, optional `heading`), `C` = lawnmower coverage of its polygon (`5`, `5 90`), `P` = one-shot publish the vehicle's current position as a ROS 2 `sensor_msgs/NavSatFix`, `i` saves a satellite snapshot (the loaded `.kml` overlay is drawn onto it too, if one is loaded) |
 | `l` | Flight logs | list and download `.ulg` logs (fast, queue-based downloader); `u` uploads the selected log to the PX4 flight-review web server and copies the plot URL, `a` runs the `ecl_ekf` health check on it |
 | `g` | Event log | scrolling INFO / WARN / ERROR / FAILSAFE / COMMAND feed |
 | `t` | MAVLink shell | PX4 NuttShell over `SERIAL_CONTROL`, like QGC's MAVLink Console |
 | `f` | Flash firmware | pick a `.px4` file and a serial port, flash via `px_uploader.py` |
 | `u` | USB / network | companion-computer sanity check: USB device enumeration, Wi-Fi/Ethernet link and IP - independent of the MAVLink link |
-| `v` | LiDAR point cloud | summary + scatter view of a ROS 2 `sensor_msgs/PointCloud2` topic (e.g. Livox `/livox/points`), in the sensor's own frame; `1`/`2`/`3` switch top-down / front / oblique projection, `c` toggles a freely-rotatable camera panned/tilted with `hjkl`, `t` changes the subscribed topic |
 | `E` | EKF reset | re-initialises the estimator, behind `type YES` |
 | `?` | About | logo, author/contact, version |
 
 Every state-changing action (arm, disarm, takeoff, land, RTL, hold, mode
 change, parameter set, reboot, calibration, goto, arming jog, kill, set home,
-geofence action, geofence upload) goes through a `type YES` confirmation shown as a
+geofence action, geofence upload, offboard on/off) goes through a `type YES` confirmation shown as a
 bar across the bottom of the screen. `lazypx4` never force-arms - takeoff,
 goto and jog all require you to have armed with `a` first, plus a
 GPS/global position.
@@ -100,8 +99,22 @@ On the **Map screen** (`n`):
 
 **Flight commands** — every dashboard flight command also works here (while
 jog isn't armed): `a`/`d` arm/disarm, `T`/`L`/`R` takeoff/land/RTL, `h` hold,
-`K` kill, `H` set home, `G` geofence action - same keys, same `type YES`
+`F` offboard on/off, `K` kill, `H` set home, `G` geofence action - same keys, same `type YES`
 confirmations. Jog owns `a`/`d`/`h`/etc. instead whenever it's armed (`x`).
+
+**View** — the grid is drawn to scale (a terminal row counts as two columns
+tall, so the header shows separate E / N half-ranges). It follows the vehicle
+by default (`u` toggles back to the old origin-centred view that grows to keep
+the vehicle, setpoint and KML in sight); the arrow keys pan by a quarter of the
+range, `+`/`-` zoom, `0` resets both. `j`/`k` and `Ctrl-D`/`Ctrl-U` still
+scroll the page.
+
+**LiDAR overlay** — `V` draws the latest `--lidar-topic` scan, coloured by
+height. Points are taken in the robot frame (x forward / y left / z up),
+rotated by the vehicle's yaw and placed at its position, so obstacles stay put
+on the map while the vehicle moves through them. `B` switches to a world
+(ENU `map`/`odom`) cloud that is drawn as-is; `v` changes the topic. The line
+under the map shows the cloud's `frame_id` and the mode in use.
 
 **Goto** — `g` sends the vehicle to a target in one of three frames, chosen
 by an optional leading letter (default is relative, unchanged from before):
@@ -163,7 +176,7 @@ toolchain ([rustup.rs](https://rustup.rs)); then:
 git clone https://github.com/manuelboldrer/lazypx4.git
 cd lazypx4
 install/install.sh          # plain build
-# or, with the ROS 2 screens (see below):
+# or, with the ROS 2 features (see below):
 source /opt/ros/jazzy/setup.bash && install/install.sh --ros
 ```
 
@@ -183,20 +196,21 @@ cargo install --path .
 
 The default build is a single ~5 MB binary that needs only glibc - no
 Python, no ROS - so you can copy it straight onto a companion computer. The
-ROS 2 screens then say they're unavailable.
+ROS 2 features (map LiDAR / NAVPATH / FIRE overlays, `[P]`) then say they're unavailable.
 
 ### With ROS 2
 
-The `[v]` LiDAR and `[w]` camera screens, the map's NAVPATH / FIRE
-overlays, `[P]` GPS publish and the dashboard's ROS clock need the `ros`
+The map's LiDAR / NAVPATH / FIRE overlays, `[P]` GPS publish and the dashboard's ROS clock need the `ros`
 feature:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-# optional: only generate the message types lazypx4 uses (much faster build)
-export IDL_PACKAGE_FILTER="std_msgs;sensor_msgs;nav_msgs;geometry_msgs;builtin_interfaces;rosgraph_msgs;rcl_interfaces"
 cargo build --release --features ros
 ```
+
+`.cargo/config.toml` pins `IDL_PACKAGE_FILTER` to the message packages
+lazypx4 uses, so r2r only generates those (much faster) and the build doesn't
+depend on what your shell exports.
 
 This uses [r2r](https://github.com/sequenceplanner/r2r), which goes through
 `rcl`, so it talks over whatever RMW your sourced ROS install uses (Fast
@@ -234,9 +248,8 @@ lazypx4 --port 14550           # a different MAVLink UDP port
 lazypx4 --log-dir ~/px4_logs   # where downloaded .ulg logs go
 lazypx4 --disk-path /data      # which filesystem the HOST block reports
 lazypx4 --firmware-dir ~/px4/build  # where [f] looks for .px4 files
-lazypx4 --lidar-topic /livox/points # ROS 2 topic for the [v] screen
+lazypx4 --lidar-topic /livox/points # ROS 2 PointCloud2 for the [n] screen's [V] overlay ([v] there changes it)
 lazypx4 --navpath-topic /navsat_utm_path # ROS 2 nav_msgs/Path for the [n] screen's [N] overlay
-lazypx4 --camera-topic /camera/image_raw --camera-topic-2 /camera2/image_raw # [w] screen topics
 lazypx4 --kml mission.kml       # preload the [n] mission screen's fence/waypoint overlay
 lazypx4 --help
 ```
