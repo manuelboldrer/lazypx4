@@ -144,8 +144,14 @@ pub const SHELL_MAX_LINES: usize = 1000;
 pub const LOG_LIST_TIMEOUT: f64 = 5.0;
 pub const LOG_LIST_QUIET_PERIOD: f64 = 0.60;
 pub const LOG_CHUNK_SIZE: usize = 90;
-pub const LOG_REQUEST_SIZE: u32 = 5000;
+/// Bytes asked for per LOG_REQUEST_DATA. Large, so PX4 streams without
+/// waiting on a round-trip every few packets.
+pub const LOG_REQUEST_SIZE: u32 = 1 << 20;
+/// Wait for the first packet after a request (PX4 may be opening the file).
 pub const LOG_CHUNK_TIMEOUT: f64 = 5.0;
+/// Silence mid-stream after which the missing tail is re-requested.
+pub const LOG_STALL_TIMEOUT: f64 = 0.3;
+/// Consecutive requests without progress before giving up.
 pub const LOG_CHUNK_RETRIES: u32 = 5;
 
 pub const POSITION_TRAIL_MIN_SPACING_M: f64 = 0.2;

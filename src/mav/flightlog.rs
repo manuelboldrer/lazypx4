@@ -1,12 +1,13 @@
 //! PX4 flight-log (ULog) listing and download.
 //!
-//! The downloader asks for large LOG_REQUEST_DATA windows (PX4 streams many
-//! 90-byte LOG_DATA packets back-to-back per request) and receives them over
+//! The downloader asks for large LOG_REQUEST_DATA windows (PX4 streams
+//! 90-byte LOG_DATA packets back-to-back per request), re-requests only the
+//! missing tail when the stream stalls, and receives packets over
 //! a channel straight from the receiver thread - never through the shared
 //! state lock, which the UI and receiver contend for. Mirrors
 //! `mavlink/flightlog.py`.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -239,7 +240,12 @@ fn download_worker(link: &Link, shared: &Shared, rx: &Receiver<Chunk>, entry: &F
     }
 }
 
-/// The windowed download loop. Returns the final byte count.
+/// The streaming download loop. Returns the final byte count.
+///
+/// Requests a large window and writes packets as they arrive in order;
+/// out-of-order packets wait in `pending`. When the stream goes quiet
+/// (a lost packet, or PX4 finished the window) everything from the first
+/// missing byte to the window end is re-requested.
 fn download_into(
     link: &Link,
     shared: &Shared,
@@ -250,8 +256,14 @@ fn download_into(
     let file = File::create(temp_path).map_err(|e| e.to_string())?;
     let mut out = BufWriter::with_capacity(1 << 20, file);
     let size = entry.size as u64;
-    let mut offset: u64 = 0;
     let (target_system, target_component) = link.target();
+    // Everything before `offset` is written.
+    let mut offset: u64 = 0;
+    let mut window_end: u64 = 0;
+    let mut pending: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
+    let mut end_seen = false;
+    let mut failed_requests = 0u32;
+    let mut last_progress = 0.0;
 
     loop {
         if cancelled(shared) {
@@ -260,102 +272,91 @@ fn download_into(
         if size > 0 && offset >= size {
             break;
         }
-
-        let request_start = offset;
-        let mut request_count = if size > 0 {
-            (LOG_REQUEST_SIZE as u64).min(size - request_start)
-        } else {
-            LOG_REQUEST_SIZE as u64
-        };
-        let mut request_end = request_start + request_count;
-        let mut received: HashMap<u64, Vec<u8>> = HashMap::new();
-        let mut last_contiguous = request_start;
-        let mut end_seen = false;
-        let mut range_complete = false;
-
-        for retry in 1..=LOG_CHUNK_RETRIES {
-            if cancelled(shared) {
-                return Err("Cancelled by user".into());
-            }
-            state::lock(shared).dl_status =
-                format!("DOWNLOADING {request_count} bytes (retry {retry}/{LOG_CHUNK_RETRIES})");
-
-            link.send(&MavMessage::LOG_REQUEST_DATA(mav::LOG_REQUEST_DATA_DATA {
-                ofs: request_start as u32,
-                count: request_count as u32,
-                id: entry.id,
-                target_system,
-                target_component,
-            }));
-
-            let deadline = now() + LOG_CHUNK_TIMEOUT;
-            loop {
-                let remaining = deadline - now();
-                if remaining <= 0.0 {
-                    break;
-                }
-                if cancelled(shared) {
-                    return Err("Cancelled by user".into());
-                }
-                let (pkt_offset, mut data) = match rx.recv_timeout(Duration::from_secs_f64(remaining.min(0.2))) {
-                    Ok(chunk) => chunk,
-                    Err(RecvTimeoutError::Timeout) => continue,
-                    Err(RecvTimeoutError::Disconnected) => return Err("receiver stopped".into()),
-                };
-                let pkt_offset = pkt_offset as u64;
-                if data.is_empty() {
-                    end_seen = true;
-                } else if (request_start..request_end).contains(&pkt_offset) {
-                    data.truncate((request_end - pkt_offset) as usize);
-                    received.entry(pkt_offset).or_insert(data);
-                }
-                while let Some(packet) = received.get(&last_contiguous) {
-                    last_contiguous += packet.len() as u64;
-                }
-                if last_contiguous >= request_end {
-                    range_complete = true;
-                    break;
-                }
-                // Unknown size: PX4's end marker closes the log.
-                if end_seen && size == 0 && last_contiguous > request_start {
-                    request_end = last_contiguous;
-                    request_count = request_end - request_start;
-                    range_complete = true;
-                    break;
-                }
-            }
-            if range_complete {
-                break;
-            }
+        // Unknown size: PX4's end marker with no gaps left closes the log.
+        if size == 0 && end_seen && pending.is_empty() && offset > 0 {
+            break;
         }
-
-        if !range_complete {
+        if failed_requests >= LOG_CHUNK_RETRIES {
             return Err(format!(
-                "Range {request_start}-{request_end} incomplete: received {}/{request_count} bytes after {LOG_CHUNK_RETRIES} retries",
-                last_contiguous.saturating_sub(request_start)
+                "No data at offset {offset} after {LOG_CHUNK_RETRIES} requests ({offset}/{size} bytes received)"
             ));
         }
 
-        let mut write_offset = request_start;
-        while write_offset < request_end {
-            let data = received
-                .get(&write_offset)
-                .ok_or_else(|| format!("Missing packet at offset {write_offset}"))?;
-            out.write_all(data).map_err(|e| e.to_string())?;
-            write_offset += data.len() as u64;
+        if offset >= window_end {
+            window_end = offset + LOG_REQUEST_SIZE as u64;
+            if size > 0 {
+                window_end = window_end.min(size);
+            }
         }
-        offset = write_offset;
+        let request_offset = offset;
+        state::lock(shared).dl_status = if failed_requests == 0 {
+            "DOWNLOADING".into()
+        } else {
+            format!("DOWNLOADING (retry {}/{LOG_CHUNK_RETRIES})", failed_requests + 1)
+        };
+        link.send(&MavMessage::LOG_REQUEST_DATA(mav::LOG_REQUEST_DATA_DATA {
+            ofs: offset as u32,
+            count: (window_end - offset) as u32,
+            id: entry.id,
+            target_system,
+            target_component,
+        }));
+        end_seen = false;
 
-        {
-            let mut st = state::lock(shared);
-            st.dl_received = offset;
-            let elapsed = (now() - st.dl_started_at).max(0.001);
-            st.dl_speed = offset as f64 / elapsed;
+        let mut got_any = false;
+        let mut last_packet = now();
+        while offset < window_end {
+            let wait = if got_any { LOG_STALL_TIMEOUT } else { LOG_CHUNK_TIMEOUT };
+            let remaining = last_packet + wait - now();
+            if remaining <= 0.0 {
+                break;
+            }
+            if cancelled(shared) {
+                return Err("Cancelled by user".into());
+            }
+            let (pkt_offset, mut data) = match rx.recv_timeout(Duration::from_secs_f64(remaining.min(0.1))) {
+                Ok(chunk) => chunk,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => return Err("receiver stopped".into()),
+            };
+            got_any = true;
+            last_packet = now();
+            if data.is_empty() {
+                end_seen = true;
+                break;
+            }
+            let pkt_offset = pkt_offset as u64;
+            if pkt_offset >= window_end || pkt_offset + data.len() as u64 <= offset {
+                continue;
+            }
+            data.truncate((window_end - pkt_offset) as usize);
+            pending.entry(pkt_offset).or_insert(data);
+
+            // Write out whatever is now contiguous (packets may overlap
+            // after a re-request).
+            while let Some(entry) = pending.first_entry() {
+                let pkt = *entry.key();
+                if pkt > offset {
+                    break;
+                }
+                let data = entry.remove();
+                let end = pkt + data.len() as u64;
+                if end > offset {
+                    out.write_all(&data[(offset - pkt) as usize..]).map_err(|e| e.to_string())?;
+                    offset = end;
+                }
+            }
+
+            let t = now();
+            if t - last_progress >= 0.2 {
+                last_progress = t;
+                let mut st = state::lock(shared);
+                st.dl_received = offset;
+                st.dl_speed = offset as f64 / (t - st.dl_started_at).max(0.001);
+            }
         }
 
-        if size == 0 && end_seen {
-            break;
-        }
+        failed_requests = if offset > request_offset { 0 } else { failed_requests + 1 };
     }
 
     out.flush().map_err(|e| e.to_string())?;
