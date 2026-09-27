@@ -3,6 +3,8 @@ A vim-style, keyboard-only TUI for PX4 — built for headless, multi-vehicle ops
 
 ![lazypx4 demo](docs/demo.gif)
 
+![lazypx4 rbl demo](docs/demo_rbl.gif)
+
 A terminal UI for a PX4 vehicle over MAVLink, in the spirit of
 [lazygit](https://github.com/jesseduffield/lazygit) and
 [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by [mrs_uav_status](https://github.com/ctu-mrs/mrs_uav_status.git).
