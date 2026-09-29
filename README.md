@@ -343,23 +343,6 @@ src/
 The parameter metadata is embedded from `data/param_meta.json.xz` with
 `include_bytes!`.
 
-## Implementation notes
-
-- **NSH input is edited locally and sent on ENTER** (↑/↓ history, ←/→ editing),
-  like PX4's `Tools/mavlink_shell.py` and QGC's console. Recent PX4
-  (`66f197b6ea`, "mavlink_shell: no echo of commands") makes the MAVLink shell
-  echo input itself. On SITL, `pxh` echoes it too, so forwarding every keystroke
-  showed each character twice. Exactly one echo of a sent command is kept.
-- rust-mavlink needs the `mav2-message-extensions` feature, or it silently drops
-  MAVLink 2 extension fields (GPS accuracy, dual-antenna yaw, extra battery cells).
-
-## Python version
-
-lazypx4 started as a Python application; that implementation is kept in
-[`python/`](python/) (see [`python/README.md`](python/README.md) for its
-install and usage). It is feature-equivalent but no longer the main
-version.
-
 ## Status
 
 `lazypx4` is under active testing - if you hit a bug or have an idea for an
