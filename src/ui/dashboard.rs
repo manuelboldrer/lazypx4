@@ -25,6 +25,25 @@ fn rtk_text(fix: i32) -> Ln {
     }
 }
 
+/// ▁..█ per sample scaled to the window's own min..max ('·' for gaps);
+/// also returns that min and max.
+pub fn sparkline(values: &[f64]) -> (String, f64, f64) {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let finite = values.iter().copied().filter(|v| v.is_finite());
+    let lo = finite.clone().fold(f64::INFINITY, f64::min);
+    let hi = finite.fold(f64::NEG_INFINITY, f64::max);
+    let span = hi - lo;
+    let text = values
+        .iter()
+        .map(|&v| match v {
+            v if !v.is_finite() => '·',
+            _ if span <= f64::EPSILON => BARS[3],
+            v => BARS[(((v - lo) / span) * 7.0).round().clamp(0.0, 7.0) as usize],
+        })
+        .collect();
+    (text, lo, hi)
+}
+
 /// Condense the estimator flags into one coloured verdict.
 pub fn ekf_summary(flags: u32, is_estimator_status: bool, status: &str) -> (String, Color) {
     if flags == 0 {
@@ -73,7 +92,7 @@ fn rangefinder_status(rng_ctrl: Option<f64>, ekf_flags: u32, orientation: i32, a
     }
 }
 
-fn vibration_verdict(st: &State) -> (&'static str, Color) {
+pub fn vibration_verdict(st: &State) -> (&'static str, Color) {
     if st.clipping.iter().any(|&c| c > 0) {
         return ("CLIPPING", RED);
     }
@@ -164,8 +183,11 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
             .raw(" LINK: ")
             .spans(link.0)
             .raw(format!(
-                "    PORT: {}    SYS: {}    COMP: {}    LOCKED: {}",
-                ctx.app.settings.port,
+                "    {}    SYS: {}    COMP: {}    LOCKED: {}",
+                match &ctx.app.settings.replay {
+                    Some((path, _)) => format!("REPLAY: {}", std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy()),
+                    None => format!("PORT: {}", ctx.app.settings.port),
+                },
                 st.target_system,
                 st.target_component,
                 if st.vehicle_locked { "YES" } else { "NO" }
@@ -441,9 +463,9 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     lines.push(section("BATTERY", ""));
     let level = if st.battery < 0.0 {
         Ln::new().raw("--")
-    } else if st.battery <= BATTERY_CRITICAL {
+    } else if st.battery <= ctx.app.settings.battery_critical {
         Ln::new().st(format!("{:.0}%", st.battery), Style::new().fg(RED).add_modifier(Modifier::BOLD))
-    } else if st.battery <= BATTERY_LOW {
+    } else if st.battery <= ctx.app.settings.battery_low {
         Ln::new().fg(format!("{:.0}%", st.battery), YELLOW)
     } else {
         Ln::new().fg(format!("{:.0}%", st.battery), GREEN)
@@ -457,6 +479,33 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
             .raw(format!("   Voltage: {volts}   Current: {amps}"))
             .line(),
     );
+
+    // --- TRENDS ------------------------------------------------------------
+    let trend_width = ctx.width.saturating_sub(40).min(TREND_SAMPLES);
+    if trend_width >= 10 && !st.trends.battery.is_empty() {
+        lines.push(blank());
+        lines.push(section("TRENDS", &format!("last {} s", trend_width.min(st.trends.battery.len()))));
+        let tr = &st.trends;
+        for (label, q, unit, color) in [
+            ("Battery", &tr.battery, "%", GREEN),
+            ("Alt (rel)", &tr.altitude, "m", CYAN),
+            ("Vibration", &tr.vibration, "", YELLOW),
+            ("Link", &tr.rx_rate, "msg/s", GREEN),
+        ] {
+            let values: Vec<f64> = q.iter().skip(q.len().saturating_sub(trend_width)).copied().collect();
+            let (spark, lo, hi) = sparkline(&values);
+            let now_v = values.last().copied().filter(|v| v.is_finite());
+            let range = if lo.is_finite() { format!("{lo:.1}..{hi:.1}") } else { "--".into() };
+            lines.push(
+                Ln::new()
+                    .raw(format!("   {label:<10}"))
+                    .fg(format!("{spark:<trend_width$}"), color)
+                    .raw(format!("  {:>7} {unit:<5}", now_v.map(|v| format!("{v:.1}")).unwrap_or_else(|| "--".into())))
+                    .dim(format!(" {range}"))
+                    .line(),
+            );
+        }
+    }
 
     // --- NAVIGATION / ESTIMATION -----------------------------------------
     lines.push(blank());

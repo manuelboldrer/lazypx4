@@ -5,8 +5,10 @@
 //! frame; page-style screens are scrolled by the frame, list screens window
 //! themselves around their cursor.
 
-mod dashboard;
+pub mod dashboard;
+mod help;
 mod hostui;
+pub mod preflight;
 mod lists;
 mod map;
 mod other;
@@ -195,14 +197,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    let prompt_rows = if app.session.confirm.is_some() || app.session.input.is_some() {
+    let prompt_rows = if app.session.confirm.is_some() || app.session.input.is_some() || app.session.cmd_active {
         2
     } else if app.session.search_active || !app.session.search_query.is_empty() && app.session.screen_is_searchable() {
         1
     } else {
         0
     };
-    let [body, keybar, prompt] = Layout::vertical([
+    let alert_rows = if state::lock(&app.shared).alerts.is_empty() { 0 } else { 1 };
+    let [banner, body, keybar, prompt] = Layout::vertical([
+        Constraint::Length(alert_rows),
         Constraint::Min(1),
         Constraint::Length(1),
         Constraint::Length(prompt_rows),
@@ -220,6 +224,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
 
     let st = state::lock(&app.shared);
+
+    if alert_rows > 0 {
+        draw_alert_banner(frame, &st, banner);
+    }
 
     if let Some(sidebar) = sidebar {
         draw_sidebar(frame, app, &st, sidebar);
@@ -265,6 +273,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_keybar(frame, keybar, &footer, &scroll_note);
     draw_prompt(frame, app, prompt);
     drop(st);
+    if app.session.help_open {
+        help::draw(frame, body, screen, &mut app.session.help_scroll);
+    }
 
     match screen {
         Screen::Log => app.session.log_page = page.max(1),
@@ -281,9 +292,9 @@ impl crate::app::Session {
 
 fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
     match screen {
-        Screen::Dashboard => (dashboard::draw(ctx), "[a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old o[F]fboard [m]ode · TAB panels · q quit".into()),
+        Screen::Dashboard => (dashboard::draw(ctx), "[a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old o[F]fboard [m]ode · [y] preflight · ? keys · : command · q quit".into()),
         Screen::ModeSelect => (lists::modes(ctx), "↑↓/jk select · ENTER set mode · [r] re-request · / search · [m] back".into()),
-        Screen::Parameters => (lists::parameters(ctx), "ENTER edit · [v] ALL/CHANGED · [r] refresh · [s] save · [l] load file · [b] reboot · / search · [p] back".into()),
+        Screen::Parameters => (lists::parameters(ctx), "ENTER edit · [v] ALL/CHANGED · [r] refresh · [s] save · [l] load · [D] diff · [b] reboot · / search · [p] back".into()),
         Screen::Log => (lists::event_log(ctx), "↑↓ scroll · PGUP/PGDN page · [c] clear · / search · [g] back".into()),
         Screen::FlightLogs => (
             lists::flight_logs(ctx),
@@ -292,7 +303,8 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
         Screen::Shell => (lists::shell(ctx), "ENTER run · ↑↓ history · ←→ edit · PGUP/PGDN scroll · CTRL-C interrupt · CTRL-L clear · ESC panels".into()),
         Screen::Control => (other::control(ctx), "[r] re-request streams · [c] back · ESC panels".into()),
         Screen::Calibration => (other::calibration(ctx), "[g]yro [a]ccel [l]evel [c]ompass [b]aro · [r] re-request · [s] back".into()),
-        Screen::About => (other::about(), "[?] back · ESC panels".into()),
+        Screen::About => (other::about(), "ESC panels".into()),
+        Screen::Preflight => (preflight::draw(ctx), "[y] back · ESC panels · ? keys".into()),
         Screen::Map => (map::draw(ctx), "j/k scroll · keys listed below the map · [n] back · ESC panels".into()),
         Screen::Host => (hostui::host(ctx), "[i] speed test · [u] back · ESC panels".into()),
         Screen::Firmware => (
@@ -306,7 +318,14 @@ fn draw_sidebar(frame: &mut Frame, app: &App, st: &State, area: Rect) {
     let [status_area, nav_area] = Layout::vertical([Constraint::Length(7), Constraint::Min(3)]).areas(area);
 
     // At-a-glance vehicle status, visible from every screen.
-    let link = if st.connected {
+    let replay = app.link.with_player(|p| {
+        let pos = p.position_s() as u64;
+        let state = if p.done { "END".to_string() } else if p.paused { "PAUSED".into() } else { format!("{}x", p.speed) };
+        format!("REPLAY {state} {:02}:{:02}", pos / 60, pos % 60)
+    });
+    let link = if let Some(text) = replay {
+        Span::styled(text, Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+    } else if st.connected {
         Span::styled("CONNECTED", Style::new().fg(GREEN))
     } else if st.vehicle_locked {
         Span::styled("LOST", Style::new().fg(RED).add_modifier(Modifier::BOLD))
@@ -316,9 +335,9 @@ fn draw_sidebar(frame: &mut Frame, app: &App, st: &State, area: Rect) {
     let battery = if st.battery < 0.0 {
         Span::styled("--", Style::new().add_modifier(Modifier::DIM))
     } else {
-        let color = if st.battery <= BATTERY_CRITICAL {
+        let color = if st.battery <= app.settings.battery_critical {
             RED
-        } else if st.battery <= BATTERY_LOW {
+        } else if st.battery <= app.settings.battery_low {
             YELLOW
         } else {
             GREEN
@@ -371,6 +390,26 @@ fn draw_sidebar(frame: &mut Frame, app: &App, st: &State, area: Rect) {
     );
 }
 
+/// The newest unacknowledged alert, flashing at 1 Hz until [A].
+fn draw_alert_banner(frame: &mut Frame, st: &State, area: Rect) {
+    let Some((time, text)) = st.alerts.last() else { return };
+    let on = (crate::state::now() * 2.0) as i64 % 2 == 0;
+    let style = if on {
+        Style::new().bg(RED).fg(Color::White).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(RED).add_modifier(Modifier::BOLD)
+    };
+    let more = match st.alerts.len() {
+        1 => String::new(),
+        n => format!("  (+{} more - event log [g])", n - 1),
+    };
+    let line = Line::from(vec![
+        Span::styled(format!(" ⚠ ALERT {time}  {text}{more} "), style),
+        Span::styled("  [A] acknowledge", Style::new().add_modifier(Modifier::DIM)),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn draw_keybar(frame: &mut Frame, area: Rect, footer: &str, scroll_note: &str) {
     frame.render_widget(
         Paragraph::new(Ln::new().raw(" ").dim(format!("{footer}{scroll_note}")).line()),
@@ -380,7 +419,21 @@ fn draw_keybar(frame: &mut Frame, area: Rect, footer: &str, scroll_note: &str) {
 
 fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
     let bar = Style::new().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD);
-    let lines = if let Some(c) = &app.session.confirm {
+    let lines = if app.session.cmd_active {
+        let edit = &app.session.cmd_edit;
+        let before: String = edit.text[..edit.cursor].iter().collect();
+        let under: String = edit.text.get(edit.cursor).map(|c| c.to_string()).unwrap_or_else(|| " ".into());
+        let after: String = edit.text.iter().skip(edit.cursor + 1).collect();
+        vec![
+            Ln::new().st(" COMMAND ", bar).raw("  ").dim(app.cmdline_hint()).line(),
+            Ln::new()
+                .st("   :     ", bar)
+                .raw(format!("  {before}"))
+                .st(under, Style::new().add_modifier(Modifier::REVERSED))
+                .raw(after)
+                .line(),
+        ]
+    } else if let Some(c) = &app.session.confirm {
         vec![
             Ln::new().st(" CONFIRM ", bar).raw("  ").bold(c.text.clone()).line(),
             Ln::new()

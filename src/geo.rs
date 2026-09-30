@@ -282,3 +282,168 @@ mod tests {
         assert!((bearing_deg(52.0, 6.0, 52.0, 6.001) - 90.0).abs() < 0.01);
     }
 }
+
+// ---------------------------------------------------------------------------
+// QGroundControl .plan files
+// ---------------------------------------------------------------------------
+
+/// One MISSION_ITEM_INT to upload, as QGC stores it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanItem {
+    pub command: u16,
+    pub frame: u8,
+    /// param1..4, x (lat), y (lon), z (alt). Missing / null = NaN.
+    pub params: [f64; 7],
+    pub autocontinue: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Plan {
+    pub items: Vec<PlanItem>,
+    pub home: Option<(f64, f64, f64)>,
+    /// The overlay the map, [W] / [C] and the fence upload work from.
+    pub overlay: Kml,
+}
+
+/// MAV_FRAME_MISSION: the item has no position (DO_* / condition commands).
+const MAV_FRAME_MISSION: u8 = 2;
+
+fn plan_item(v: &serde_json::Value) -> Option<PlanItem> {
+    let mut params = [f64::NAN; 7];
+    for (slot, p) in params.iter_mut().zip(v.get("params")?.as_array()?) {
+        *slot = p.as_f64().unwrap_or(f64::NAN);
+    }
+    Some(PlanItem {
+        command: v.get("command")?.as_u64()? as u16,
+        frame: v.get("frame").and_then(|f| f.as_u64()).unwrap_or(3) as u8,
+        params,
+        autocontinue: v.get("autoContinue").and_then(|a| a.as_bool()).unwrap_or(true),
+    })
+}
+
+/// Simple items as-is; complex items (survey, corridor scan, structure
+/// scan) flattened to the simple items QGC already generated for them.
+fn collect_items(items: &[serde_json::Value], out: &mut Vec<PlanItem>) {
+    for item in items {
+        match item.get("type").and_then(|t| t.as_str()) {
+            Some("SimpleItem") => out.extend(plan_item(item)),
+            Some("ComplexItem") => {
+                let nested = item
+                    .get("TransectStyleComplexItem")
+                    .and_then(|t| t.get("Items"))
+                    .or_else(|| item.get("Items"))
+                    .and_then(|i| i.as_array());
+                if let Some(nested) = nested {
+                    collect_items(nested, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn parse_plan(path: &str) -> Result<Plan, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
+    parse_plan_text(&text).map_err(|e| format!("{path}: {e}"))
+}
+
+pub fn parse_plan_text(text: &str) -> Result<Plan, String> {
+    let doc: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("not a QGC plan: {e}"))?;
+    if doc.get("fileType").and_then(|t| t.as_str()) != Some("Plan") {
+        return Err("not a QGC plan (fileType != Plan)".into());
+    }
+    let mission = doc.get("mission");
+    let mut items = Vec::new();
+    if let Some(list) = mission.and_then(|m| m.get("items")).and_then(|i| i.as_array()) {
+        collect_items(list, &mut items);
+    }
+    let home = mission
+        .and_then(|m| m.get("plannedHomePosition"))
+        .and_then(|h| h.as_array())
+        .and_then(|h| Some((h.first()?.as_f64()?, h.get(1)?.as_f64()?, h.get(2).and_then(|a| a.as_f64()).unwrap_or(0.0))));
+
+    let fence_rings: Vec<Vec<(f64, f64)>> = doc
+        .get("geoFence")
+        .and_then(|g| g.get("polygons"))
+        .and_then(|p| p.as_array())
+        .map(|polys| {
+            polys
+                .iter()
+                .filter(|p| p.get("inclusion").and_then(|i| i.as_bool()).unwrap_or(true))
+                .filter_map(|p| {
+                    p.get("polygon")?.as_array().map(|pts| {
+                        pts.iter()
+                            .filter_map(|pt| Some((pt.get(0)?.as_f64()?, pt.get(1)?.as_f64()?)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .filter(|r| r.len() >= 3)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let waypoints = items
+        .iter()
+        .filter(|i| i.frame != MAV_FRAME_MISSION && i.params[4].is_finite() && i.params[5].is_finite())
+        .filter(|i| i.params[4] != 0.0 || i.params[5] != 0.0)
+        .enumerate()
+        .map(|(n, i)| Waypoint {
+            lat: i.params[4],
+            lon: i.params[5],
+            alt: if i.params[6].is_finite() { i.params[6] } else { 0.0 },
+            name: format!("WP{}", n + 1),
+        })
+        .collect();
+
+    Ok(Plan {
+        items,
+        home,
+        overlay: Kml { waypoints, fence_rings, ground_alt: home.map(|h| h.2).filter(|a| *a != 0.0) },
+    })
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    const PLAN: &str = r#"{
+      "fileType": "Plan",
+      "geoFence": {"circles": [], "polygons": [
+        {"inclusion": true, "polygon": [[52.0, 6.0], [52.0, 6.001], [52.001, 6.001], [52.001, 6.0]], "version": 1},
+        {"inclusion": false, "polygon": [[52.0, 6.0], [52.0, 6.001], [52.001, 6.001]], "version": 1}
+      ], "version": 2},
+      "mission": {
+        "items": [
+          {"type": "SimpleItem", "command": 22, "frame": 3, "params": [0, 0, 0, null, 52.0001, 6.0001, 10], "autoContinue": true},
+          {"type": "SimpleItem", "command": 178, "frame": 2, "params": [1, 5, -1, 0, 0, 0, 0], "autoContinue": true},
+          {"type": "ComplexItem", "complexItemType": "survey", "TransectStyleComplexItem": {"Items": [
+            {"type": "SimpleItem", "command": 16, "frame": 3, "params": [0, 0, 0, null, 52.0002, 6.0002, 20], "autoContinue": true},
+            {"type": "SimpleItem", "command": 16, "frame": 3, "params": [0, 0, 0, null, 52.0003, 6.0003, 20], "autoContinue": true}
+          ]}},
+          {"type": "SimpleItem", "command": 20, "frame": 2, "params": [0, 0, 0, 0, 0, 0, 0], "autoContinue": true}
+        ],
+        "plannedHomePosition": [52.0, 6.0, 35.5]
+      },
+      "rallyPoints": {"points": [], "version": 2},
+      "version": 1
+    }"#;
+
+    #[test]
+    fn parses_items_fence_and_home() {
+        let plan = parse_plan_text(PLAN).unwrap();
+        let commands: Vec<u16> = plan.items.iter().map(|i| i.command).collect();
+        assert_eq!(commands, vec![22, 178, 16, 16, 20]);
+        assert!(plan.items[0].params[3].is_nan());
+        assert_eq!(plan.home, Some((52.0, 6.0, 35.5)));
+        assert_eq!(plan.overlay.fence_rings.len(), 1, "exclusion polygons are not inclusion fences");
+        let names: Vec<&str> = plan.overlay.waypoints.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, vec!["WP1", "WP2", "WP3"]);
+        assert_eq!(plan.overlay.waypoints[1].alt, 20.0);
+    }
+
+    #[test]
+    fn rejects_other_json() {
+        assert!(parse_plan_text(r#"{"fileType": "Nope"}"#).is_err());
+        assert!(parse_plan_text("not json").is_err());
+    }
+}

@@ -36,6 +36,143 @@ pub struct Settings {
     pub navpath_topic: String,
     #[cfg_attr(not(feature = "ros"), allow(dead_code))]
     pub use_sim_time: bool,
+    /// Battery % thresholds for the yellow warning / red failsafe colour.
+    pub battery_low: f64,
+    pub battery_critical: f64,
+    /// `:` command-line aliases: name -> command it expands to.
+    pub aliases: std::collections::BTreeMap<String, String>,
+    /// Directory the session .tlog goes to; None = don't record.
+    pub tlog_dir: Option<String>,
+    /// `--replay FILE` at this speed instead of listening on UDP.
+    pub replay: Option<(String, f64)>,
+    /// The KEY PARAMETERS panel: columns of (heading, parameter names).
+    pub key_params: KeyParamColumns,
+    /// Key remaps (pressed key -> key it acts as; "" disables the key).
+    pub keys: std::collections::BTreeMap<String, String>,
+    /// Ring the terminal bell on an alert (tmux flags the window).
+    pub alert_bell: bool,
+    /// The lazypx4.toml that was loaded, if any.
+    pub config_path: Option<String>,
+}
+
+/// `lazypx4.toml`. Every field is optional; a command-line flag beats the
+/// file, the file beats the built-in default.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FileConfig {
+    pub link: LinkFile,
+    pub paths: PathsFile,
+    pub ros: RosFile,
+    pub safety: SafetyFile,
+    pub alerts: AlertsFile,
+    pub fleet: FleetFile,
+    /// heading -> parameter names, in file order.
+    pub key_params: Option<toml::Table>,
+    pub keys: std::collections::BTreeMap<String, String>,
+    pub aliases: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LinkFile {
+    pub port: Option<u16>,
+    /// Record every session to a .tlog (default true).
+    pub record_tlog: Option<bool>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PathsFile {
+    pub log_dir: Option<String>,
+    pub param_dir: Option<String>,
+    pub param_defaults: Option<String>,
+    pub map_dir: Option<String>,
+    pub firmware_dir: Option<String>,
+    pub tools_dir: Option<String>,
+    pub disk_path: Option<String>,
+    pub kml: Option<String>,
+    pub tlog_dir: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RosFile {
+    pub lidar_topic: Option<String>,
+    pub navpath_topic: Option<String>,
+    pub use_sim_time: Option<bool>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SafetyFile {
+    pub allow_log_download_while_armed: Option<bool>,
+    pub battery_low: Option<f64>,
+    pub battery_critical: Option<f64>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AlertsFile {
+    pub bell: Option<bool>,
+}
+
+/// KEY PARAMETERS panel columns of (heading, parameter names).
+pub type KeyParamColumns = Vec<Vec<(String, Vec<String>)>>;
+
+/// The built-in KEY PARAMETERS layout, owned.
+pub fn default_key_params() -> KeyParamColumns {
+    KEY_PARAMETER_COLUMNS
+        .iter()
+        .map(|col| col.iter().map(|(h, names)| (h.to_string(), names.iter().map(|n| n.to_string()).collect())).collect())
+        .collect()
+}
+
+/// `[key_params]` groups, split into two columns of about equal height.
+pub fn key_params_from_table(table: &toml::Table) -> Result<KeyParamColumns, String> {
+    let mut groups = Vec::new();
+    for (heading, value) in table {
+        let names = value
+            .as_array()
+            .and_then(|a| a.iter().map(|v| v.as_str().map(|s| s.to_uppercase())).collect::<Option<Vec<_>>>())
+            .ok_or_else(|| format!("key_params.{heading}: expected a list of parameter names"))?;
+        groups.push((heading.to_uppercase(), names));
+    }
+    // Each group costs its rows plus a heading and a spacer.
+    let total: usize = groups.iter().map(|(_, n)| n.len() + 2).sum();
+    let mut columns = vec![Vec::new(), Vec::new()];
+    let mut used = 0;
+    for g in groups {
+        let col = usize::from(used >= total.div_ceil(2) && !columns[0].is_empty());
+        used += g.1.len() + 2;
+        columns[col].push(g);
+    }
+    columns.retain(|c| !c.is_empty());
+    Ok(columns)
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FleetFile {
+    /// Ports `--fleet` (without a list) watches.
+    pub ports: Vec<u16>,
+}
+
+pub const CONFIG_FILE_NAME: &str = "lazypx4.toml";
+
+/// `--config`, else `./lazypx4.toml`, else the one in the checkout the
+/// binary was built from (like the Tools/ lookup). An explicit `--config`
+/// must exist; the implicit ones are optional.
+pub fn load_file_config(explicit: Option<&str>) -> Result<(FileConfig, Option<String>), String> {
+    let path = match explicit {
+        Some(p) => Some(p.to_string()),
+        None => [CONFIG_FILE_NAME.to_string(), format!("{}/{CONFIG_FILE_NAME}", env!("CARGO_MANIFEST_DIR"))]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).is_file()),
+    };
+    let Some(path) = path else { return Ok((FileConfig::default(), None)) };
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+    let config: FileConfig = toml::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    Ok((config, Some(path)))
 }
 
 pub const HEARTBEAT_TIMEOUT: f64 = 5.0;
@@ -54,9 +191,17 @@ pub const MIN_TERMINAL_ROWS: u16 = 16;
 pub const ARM_CONFIRM_TIMEOUT: f64 = 5.0;
 
 pub const MAX_LOG_EVENTS: usize = 500;
+pub const MAX_ALERTS: usize = 20;
 
-pub const BATTERY_LOW: f64 = 30.0;
-pub const BATTERY_CRITICAL: f64 = 15.0;
+/// Sparkline history, one sample a second.
+pub const TREND_SAMPLES: usize = 240;
+
+/// A mode change this long after our last command counts as "not
+/// commanded from lazypx4".
+pub const MODE_CHANGE_COMMAND_WINDOW: f64 = 5.0;
+
+pub const DEFAULT_BATTERY_LOW: f64 = 30.0;
+pub const DEFAULT_BATTERY_CRITICAL: f64 = 15.0;
 
 // Dashboard health-colour thresholds: (GOOD, OK).
 pub const GPS_HDOP_GOOD: f64 = 1.5;

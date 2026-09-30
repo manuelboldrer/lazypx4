@@ -10,6 +10,73 @@ use crate::host::lock;
 use crate::mav::guided;
 use crate::state::{self, Target, now};
 
+/// A jog key as (forward, right, down, yaw sign) unit steps. Yaw is a
+/// compass heading, so "yaw left" decreases it. Shared with the fleet.
+pub fn jog_vector(key: &str) -> Option<(f64, f64, f64, f64)> {
+    Some(match key {
+        "k" => (1.0, 0.0, 0.0, 0.0),
+        "j" => (-1.0, 0.0, 0.0, 0.0),
+        "a" => (0.0, -1.0, 0.0, 0.0),
+        "d" => (0.0, 1.0, 0.0, 0.0),
+        "w" => (0.0, 0.0, -1.0, 0.0),
+        "s" => (0.0, 0.0, 1.0, 0.0),
+        "h" => (0.0, 0.0, 0.0, -1.0),
+        "l" => (0.0, 0.0, 0.0, 1.0),
+        _ => return None,
+    })
+}
+
+/// A parsed goto line.
+pub enum Goto {
+    /// `f [alt] [yaw]`: over the last /fire_gps_loc fix (needs ROS).
+    Fire(Vec<f64>),
+    /// Confirmation text + target.
+    Target(String, GotoTarget),
+}
+
+/// `[r|l|g|f] a b c [yaw]` - the [g] goto syntax, shared with the fleet.
+pub fn parse_goto(text: &str) -> Result<Goto, String> {
+    let text = text.replace(',', " ");
+    let mut tokens: Vec<&str> = text.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err("Goto: expected numbers - see the prompt for the syntax".into());
+    }
+    let frame = match tokens[0].to_lowercase().as_str() {
+        "r" | "rel" | "relative" => Some("relative"),
+        "l" | "local" => Some("local"),
+        "g" | "global" => Some("global"),
+        "f" | "fire" => Some("fire"),
+        _ => None,
+    };
+    if frame.is_some() {
+        tokens.remove(0);
+    }
+    let Ok(nums) = tokens.iter().map(|t| t.parse::<f64>()).collect::<Result<Vec<f64>, _>>() else {
+        return Err("Goto: expected numbers after the optional frame letter".into());
+    };
+    let frame = frame.unwrap_or("relative");
+    if frame == "fire" {
+        return Ok(Goto::Fire(nums));
+    }
+    if nums.len() < 3 {
+        return Err("Goto: need three numbers (plus an optional yaw)".into());
+    }
+    let yaw = nums.get(3).copied();
+    let yaw_text = yaw.map(|y| format!("  yaw {y:.0}")).unwrap_or_default();
+    let (a, b, c) = (nums[0], nums[1], nums[2]);
+    Ok(match frame {
+        "relative" => Goto::Target(
+            format!("GOTO [relative]  fwd {a:+.1}  right {b:+.1}  down {c:+.1} m{yaw_text}   ({:.1} m horizontal). Type YES", a.hypot(b)),
+            GotoTarget::Body(a, b, c, yaw),
+        ),
+        "local" => Goto::Target(
+            format!("GOTO [local NED]  N {a:+.1}  E {b:+.1}  D {c:+.1} m{yaw_text}   (absolute, from the local origin). Type YES"),
+            GotoTarget::Local(a, b, c, yaw),
+        ),
+        _ => Goto::Target(format!("GOTO [global]  {a:.7}, {b:.7} @ {c:.1} m MSL{yaw_text}. Type YES"), GotoTarget::Global(a, b, c, yaw)),
+    })
+}
+
 /// Trailing word that turns on "stop and face each target" for a queue.
 const FACE_WORDS: &[&str] = &["heading", "hdg", "face", "yaw"];
 
@@ -70,11 +137,15 @@ impl App {
             }
             "o" => {
                 drop(st);
-                self.request_input("KML file path (waypoints + fence overlay, visualization only):", InputKind::Kml);
+                self.request_input("KML or QGC .plan file path (waypoints + fence overlay; a .plan's mission uploads with [M]):", InputKind::Kml);
             }
             "O" => {
                 drop(st);
                 self.open_fence_upload_confirm();
+            }
+            "M" => {
+                drop(st);
+                self.open_mission_upload_confirm();
             }
             "W" => {
                 drop(st);
@@ -160,19 +231,7 @@ impl App {
             }
             _ => {}
         }
-        // (forward, right, down, yaw sign); yaw is a compass heading, so
-        // "yaw left" decreases it.
-        let (f, r, d, yaw_sign) = match key {
-            "k" => (1.0, 0.0, 0.0, 0.0),
-            "j" => (-1.0, 0.0, 0.0, 0.0),
-            "a" => (0.0, -1.0, 0.0, 0.0),
-            "d" => (0.0, 1.0, 0.0, 0.0),
-            "w" => (0.0, 0.0, -1.0, 0.0),
-            "s" => (0.0, 0.0, 1.0, 0.0),
-            "h" => (0.0, 0.0, 0.0, -1.0),
-            "l" => (0.0, 0.0, 0.0, 1.0),
-            _ => return false,
-        };
+        let Some((f, r, d, yaw_sign)) = jog_vector(key) else { return false };
         let t = now();
         if t - s.jog_last < JOG_MIN_INTERVAL {
             return true;
@@ -203,47 +262,11 @@ impl App {
     }
 
     pub(crate) fn goto_submit(&mut self, text: &str) {
-        let text = text.replace(',', " ");
-        let mut tokens: Vec<&str> = text.split_whitespace().collect();
-        let err = |app: &Self, m: &str| state::lock(&app.shared).error(m);
-        if tokens.is_empty() {
-            return err(self, "Goto: expected numbers - see the prompt for the syntax");
+        match parse_goto(text) {
+            Ok(Goto::Fire(nums)) => self.goto_fire(&nums),
+            Ok(Goto::Target(prompt, target)) => self.request_confirmation(prompt, Action::Goto(target)),
+            Err(e) => state::lock(&self.shared).error(e),
         }
-        let frame = match tokens[0].to_lowercase().as_str() {
-            "r" | "rel" | "relative" => Some("relative"),
-            "l" | "local" => Some("local"),
-            "g" | "global" => Some("global"),
-            "f" | "fire" => Some("fire"),
-            _ => None,
-        };
-        if frame.is_some() {
-            tokens.remove(0);
-        }
-        let Ok(nums) = tokens.iter().map(|t| t.parse::<f64>()).collect::<Result<Vec<f64>, _>>() else {
-            return err(self, "Goto: expected numbers after the optional frame letter");
-        };
-        let frame = frame.unwrap_or("relative");
-        if frame == "fire" {
-            return self.goto_fire(&nums);
-        }
-        if nums.len() < 3 {
-            return err(self, "Goto: need three numbers (plus an optional yaw)");
-        }
-        let yaw = nums.get(3).copied();
-        let yaw_text = yaw.map(|y| format!("  yaw {y:.0}")).unwrap_or_default();
-        let (a, b, c) = (nums[0], nums[1], nums[2]);
-        let (prompt, target) = match frame {
-            "relative" => (
-                format!("GOTO [relative]  fwd {a:+.1}  right {b:+.1}  down {c:+.1} m{yaw_text}   ({:.1} m horizontal). Type YES", a.hypot(b)),
-                GotoTarget::Body(a, b, c, yaw),
-            ),
-            "local" => (
-                format!("GOTO [local NED]  N {a:+.1}  E {b:+.1}  D {c:+.1} m{yaw_text}   (absolute, from the local origin). Type YES"),
-                GotoTarget::Local(a, b, c, yaw),
-            ),
-            _ => (format!("GOTO [global]  {a:.7}, {b:.7} @ {c:.1} m MSL{yaw_text}. Type YES"), GotoTarget::Global(a, b, c, yaw)),
-        };
-        self.request_confirmation(prompt, Action::Goto(target));
     }
 
     /// `f [alt] [yaw]`: fly over the last /fire_gps_loc fix. The fix's own
@@ -290,7 +313,11 @@ impl App {
             Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
             None => path.to_string(),
         };
+        if path.to_lowercase().ends_with(".plan") {
+            return self.load_plan(&path);
+        }
         let mut st = state::lock(&self.shared);
+        st.plan = None;
         match geo::parse_kml(&path) {
             Ok(kml) => {
                 st.info(format!(
@@ -311,7 +338,54 @@ impl App {
         }
     }
 
-    fn open_fence_upload_confirm(&mut self) {
+    /// A QGC .plan: its waypoints / inclusion fences become the overlay,
+    /// its full item list is what [M] uploads.
+    fn load_plan(&mut self, path: &str) {
+        let mut st = state::lock(&self.shared);
+        match geo::parse_plan(path) {
+            Ok(plan) => {
+                st.info(format!(
+                    "PLAN loaded: {} - {} mission item(s), {} with a position, {} fence polygon(s)",
+                    std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy(),
+                    plan.items.len(),
+                    plan.overlay.waypoints.len(),
+                    plan.overlay.fence_rings.len()
+                ));
+                if let Some((lat, lon, alt)) = plan.home {
+                    st.info(format!("  planned home {lat:.7}, {lon:.7} @ {alt:.1} m"));
+                }
+                st.kml = Some(plan.overlay.clone());
+                st.plan = Some(plan);
+                st.kml_path = path.to_string();
+                st.kml_error.clear();
+            }
+            Err(e) => {
+                st.kml = None;
+                st.plan = None;
+                st.error(format!("Plan load failed: {e}"));
+                st.kml_error = e;
+            }
+        }
+    }
+
+    pub(crate) fn open_mission_upload_confirm(&mut self) {
+        let n = {
+            let mut st = state::lock(&self.shared);
+            if st.mission_upload_active {
+                return st.warn("A mission upload is already in progress");
+            }
+            match st.plan.as_ref().map(|p| p.items.len()) {
+                Some(n) if n > 0 => n,
+                _ => return st.warn("Load a QGC .plan with mission items first ([o])"),
+            }
+        };
+        self.request_confirmation(
+            format!("UPLOAD mission to vehicle? {n} item(s). This REPLACES PX4's current mission. Type YES"),
+            Action::UploadMission,
+        );
+    }
+
+    pub(crate) fn open_fence_upload_confirm(&mut self) {
         let (rings, vertices) = {
             let mut st = state::lock(&self.shared);
             if st.fence_upload_active {
@@ -339,22 +413,17 @@ impl App {
     /// [W] (waypoints) / [C] (coverage): a key press while a queue runs
     /// cancels it; otherwise ask for the parameters.
     fn open_queue_input(&mut self, waypoints: bool) {
-        let label = if waypoints { "Waypoint queue" } else { "Coverage" };
-        let count = {
+        {
             let mut st = state::lock(&self.shared);
             if st.wp_queue_active {
                 guided::cancel_wp_queue(&mut st, "cancelled by user");
                 return;
             }
-            let count = st.kml.as_ref().map(|k| if waypoints { k.waypoints.len() } else { k.fence_rings.len() }).unwrap_or(0);
-            if count == 0 {
-                return st.error(format!("{label}: load a KML with {} first ([o])", if waypoints { "waypoints" } else { "a polygon" }));
-            }
-            if !st.armed {
-                st.warn(format!("{label}: vehicle is not armed"));
-            }
-            count
-        };
+        }
+        if !self.queue_ready(waypoints) {
+            return;
+        }
+        let count = state::lock(&self.shared).kml.as_ref().map(|k| k.waypoints.len()).unwrap_or(0);
         if waypoints {
             self.request_input(
                 format!("Waypoint queue ({count} loaded): <n> | seq | rand <N>  [+ heading]   e.g.  3   seq   rand 8 heading"),
@@ -367,6 +436,25 @@ impl App {
                 InputKind::Coverage,
             );
         }
+    }
+
+    /// A KML with waypoints / a polygon is loaded and no queue is running.
+    pub(crate) fn queue_ready(&self, waypoints: bool) -> bool {
+        let label = if waypoints { "Waypoint queue" } else { "Coverage" };
+        let mut st = state::lock(&self.shared);
+        if st.wp_queue_active {
+            st.warn(format!("{label}: a queue is already running ([W] or :wp stop cancels it)"));
+            return false;
+        }
+        let count = st.kml.as_ref().map(|k| if waypoints { k.waypoints.len() } else { k.fence_rings.len() }).unwrap_or(0);
+        if count == 0 {
+            st.error(format!("{label}: load a KML with {} first ([o])", if waypoints { "waypoints" } else { "a polygon" }));
+            return false;
+        }
+        if !st.armed {
+            st.warn(format!("{label}: vehicle is not armed"));
+        }
+        true
     }
 
     fn split_face(text: &str) -> (Vec<String>, bool) {

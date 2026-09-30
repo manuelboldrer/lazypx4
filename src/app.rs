@@ -20,6 +20,7 @@ use crate::ui;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Dashboard,
+    Preflight,
     Map,
     ModeSelect,
     Parameters,
@@ -37,6 +38,7 @@ pub enum Screen {
 /// every screen's own hotkey toggles back to it.
 pub const NAV_ITEMS: &[(Screen, &str, Option<char>)] = &[
     (Screen::Dashboard, "DASHBOARD", None),
+    (Screen::Preflight, "PREFLIGHT", Some('y')),
     (Screen::Map, "MISSION", Some('n')),
     (Screen::ModeSelect, "MODE", Some('m')),
     (Screen::Parameters, "PARAMETERS", Some('p')),
@@ -47,7 +49,7 @@ pub const NAV_ITEMS: &[(Screen, &str, Option<char>)] = &[
     (Screen::Control, "CONTROL", Some('c')),
     (Screen::Calibration, "CALIBRATE", Some('s')),
     (Screen::Firmware, "FLASH FIRMWARE", Some('f')),
-    (Screen::About, "ABOUT", Some('?')),
+    (Screen::About, "ABOUT", None),
 ];
 
 impl Screen {
@@ -65,6 +67,7 @@ impl Screen {
             Screen::Shell => "PX4 MAVLINK SHELL · NSH",
             Screen::Host => "HOST · USB / NETWORK",
             Screen::About => "ABOUT · LAZYPX4",
+            Screen::Preflight => "PREFLIGHT · GO / NO-GO",
         }
     }
 
@@ -107,8 +110,11 @@ pub enum Action {
     /// confirmation is up.
     StartQueue { targets: Vec<crate::state::Target>, mode: String, face_target: bool },
     UploadFence,
+    UploadMission,
     ArmJog,
     FlashFirmware(std::path::PathBuf, String),
+    /// `:!cmd` / `:sh` while armed.
+    HostShell(crate::app_cmd::HostRun),
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +139,7 @@ pub enum InputKind {
     LidarTopic,
     ParamSave,
     ParamLoad,
+    ParamDiff,
 }
 
 pub struct Confirm {
@@ -188,6 +195,18 @@ pub struct Session {
     pub input: Option<Input>,
     pub search_active: bool,
     pub search_query: String,
+
+    /// The `:` command line; the editor keeps its history between uses.
+    pub cmd_active: bool,
+    pub cmd_edit: crate::lineedit::LineEdit,
+    /// TAB matches listed on the prompt's hint row.
+    pub cmd_candidates: Vec<String>,
+    /// A `:!` / `:sh` the main loop runs once it has the terminal.
+    pub host_run: Option<crate::app_cmd::HostRun>,
+
+    /// The `?` key popup.
+    pub help_open: bool,
+    pub help_scroll: usize,
 }
 
 impl Session {
@@ -220,6 +239,12 @@ impl Session {
             input: None,
             search_active: false,
             search_query: String::new(),
+            cmd_active: false,
+            cmd_edit: Default::default(),
+            cmd_candidates: Vec::new(),
+            host_run: None,
+            help_open: false,
+            help_scroll: 0,
         }
     }
 }
@@ -290,6 +315,8 @@ const STARTUP_NOTES: &[&str] = &[
     "Press [l] for PX4 flight logs, [t] for the NSH shell",
     "Press [n] for the mission map: goto, jog, KML overlay, waypoint queue, fence upload",
     "Press [u] for USB / network, [f] to flash firmware",
+    "Press [:] for the command line (:help lists the commands, :!cmd runs a host command)",
+    "Press [?] for the keys of any screen, [y] for the preflight go / no-go",
 ];
 
 /// Default climb for [T] takeoff, matching PX4's MIS_TAKEOFF_ALT default.
@@ -297,7 +324,10 @@ const TAKEOFF_DEFAULT_ALT: f64 = 2.5;
 
 impl App {
     pub fn new(settings: Settings) -> std::io::Result<Self> {
-        let link = Arc::new(Link::bind(settings.port)?);
+        let link = Arc::new(match &settings.replay {
+            Some((path, speed)) => Link::replay(path, *speed)?,
+            None => Link::bind(settings.port, settings.tlog_dir.as_deref())?,
+        });
         let shared: Shared = Arc::new(Mutex::new(State::new()));
         let meta = ParamMeta::load(settings.param_defaults_file.as_deref());
 
@@ -315,12 +345,25 @@ impl App {
                     st.warn(format!("Could not read parameter defaults file: {path} - using bundled metadata"));
                 }
             }
-            st.info(format!("Listening for PX4 on udpin:0.0.0.0:{}", settings.port));
+            match (&settings.replay, &settings.tlog_dir) {
+                (Some((path, speed)), _) => st.info(format!("REPLAY of {path} at {speed}x - nothing is sent (:replay pause|resume|speed X)")),
+                (None, tlog) => {
+                    st.info(format!("Listening for PX4 on udpin:0.0.0.0:{}", settings.port));
+                    match tlog {
+                        Some(dir) => st.info(format!("Recording telemetry to {dir}/ (.tlog, from the first packet)")),
+                        None => st.info("Telemetry recording off"),
+                    }
+                }
+            }
             st.info("Waiting for PX4 heartbeat...");
             for note in STARTUP_NOTES {
                 st.info(note);
             }
             st.info(format!("Flight-log downloads go to {}", settings.log_dir));
+            match &settings.config_path {
+                Some(path) => st.info(format!("Settings from {path}")),
+                None => st.info("No lazypx4.toml found - using defaults / command-line flags"),
+            }
         }
 
         let (log_tx, log_rx) = std::sync::mpsc::channel();
@@ -394,6 +437,11 @@ impl App {
                 }
             }
 
+            if let Some(run) = self.session.host_run.take() {
+                self.run_host(terminal, run)?;
+                next_frame = Instant::now();
+            }
+
             self.tick();
 
             if Instant::now() >= next_frame {
@@ -419,7 +467,7 @@ impl App {
     }
 
     /// Periodic work: GCS heartbeat, stream setup on lock, timeouts, health.
-    fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         let t = now();
         if t - self.last_gcs_heartbeat >= 1.0 && self.link.has_peer() {
             self.last_gcs_heartbeat = t;
@@ -428,27 +476,16 @@ impl App {
 
         let mut st = state::lock(&self.shared);
 
-        // First lock (or a heartbeat recovery): announce ourselves and ask
-        // for streams. Paced, so it runs on a helper thread.
-        if st.vehicle_locked && !st.streams_configured {
-            st.streams_configured = true;
-            let link = self.link.clone();
-            std::thread::spawn(move || {
-                commands::send_gcs_heartbeat(&link);
-                commands::configure_streams(&link);
-                commands::request_estimator_params(&link);
-            });
+        // BEL goes straight to the terminal; tmux / the terminal emulator
+        // turn it into a window flag or an audible / visual bell.
+        if std::mem::take(&mut st.alert_bell) && self.settings.alert_bell {
+            use std::io::Write;
+            let mut out = std::io::stdout();
+            let _ = out.write_all(b"\x07");
+            let _ = out.flush();
         }
 
-        commands::check_pending_arm(&mut st);
-        params::check_parameter_request(&mut st);
-        params::check_pending_parameter(&mut st);
-        params::process_parameter_load(&self.link, &mut st);
-        modes::check_available_modes_request(&mut st);
-        flightlog::check_flight_log_list(&self.link, &mut st);
-        calibration::check_calibration(&mut st);
-        crate::mav::guided::check_fence_upload(&mut st);
-        update_health(&mut st);
+        service_vehicle(&self.link, &mut st, &self.settings);
         drop(st);
 
         // The [P] banner on the map expires like the dashboard's PREARM one.
@@ -518,6 +555,12 @@ impl App {
                     InputKind::LidarTopic => self.lidar_topic_submit(&input.buffer),
                     InputKind::ParamSave => self.param_save_submit(&input.buffer),
                     InputKind::ParamLoad => self.param_load_submit(&input.buffer),
+                    InputKind::ParamDiff => {
+                        let files: Vec<String> = input.buffer.split_whitespace().map(str::to_string).collect();
+                        if !files.is_empty() {
+                            self.cmd_param_diff(&files[0], files.get(1).map(String::as_str));
+                        }
+                    }
                 }
             }
             "BACKSPACE" => {
@@ -673,12 +716,7 @@ impl App {
                 calibration::send_calibration(link, shared, kind);
             }
             Action::Goto(target) => {
-                let mut st = state::lock(shared);
-                match target {
-                    GotoTarget::Body(f, r, d, y) => crate::mav::guided::goto_body(link, &mut st, f, r, d, y, false),
-                    GotoTarget::Local(n, e, d, y) => crate::mav::guided::goto_local(link, &mut st, n, e, d, y),
-                    GotoTarget::Global(la, lo, a, y) => crate::mav::guided::goto_global(link, &mut st, la, lo, a, y),
-                };
+                send_goto(link, &mut state::lock(shared), target);
             }
             Action::StartQueue { targets, mode, face_target } => {
                 crate::mav::guided::start_wp_queue(link, shared, targets, &mode, face_target);
@@ -686,11 +724,15 @@ impl App {
             Action::UploadFence => {
                 crate::mav::guided::start_fence_upload(link, &mut state::lock(shared));
             }
+            Action::UploadMission => {
+                crate::mav::mission::start_mission_upload(link, &mut state::lock(shared));
+            }
             Action::ArmJog => {
                 self.session.jog_step = JOG_STEP_M;
                 self.session.jog_armed = true;
                 state::lock(shared).command("JOG armed - w/s up/down, k/j fwd/back, a/d strafe, h/l yaw, [/] step");
             }
+            Action::HostShell(run) => self.session.host_run = Some(run),
             Action::FlashFirmware(fw, port) => {
                 crate::jobs::start_firmware_flash(&self.jobs, shared, &self.settings.tools_dir, &fw, &port);
             }
@@ -706,7 +748,20 @@ impl App {
         }
     }
 
-    fn ensure_shell(&self) -> bool {
+    /// Clear the alert banner. False when there was nothing to clear (so
+    /// the key falls through to the screen).
+    pub(crate) fn acknowledge_alerts(&self) -> bool {
+        let mut st = state::lock(&self.shared);
+        if st.alerts.is_empty() {
+            return false;
+        }
+        let n = st.alerts.len();
+        st.alerts.clear();
+        st.info(format!("{n} alert(s) acknowledged"));
+        true
+    }
+
+    pub(crate) fn ensure_shell(&self) -> bool {
         let mut st = state::lock(&self.shared);
         if st.shell_active {
             return true;
@@ -720,17 +775,22 @@ impl App {
         }
     }
 
+    pub(crate) fn takeoff_ready(&self) -> bool {
+        let mut st = state::lock(&self.shared);
+        if !st.armed {
+            st.warn("Takeoff: arm first with [a]");
+            return false;
+        }
+        if !st.global_pos_valid {
+            st.warn("Takeoff needs a GPS / global position");
+            return false;
+        }
+        true
+    }
+
     fn open_takeoff_input(&mut self) {
-        {
-            let mut st = state::lock(&self.shared);
-            if !st.armed {
-                st.warn("Takeoff: arm first with [a]");
-                return;
-            }
-            if !st.global_pos_valid {
-                st.warn("Takeoff needs a GPS / global position");
-                return;
-            }
+        if !self.takeoff_ready() {
+            return;
         }
         self.request_input(
             format!("Takeoff altitude in metres (blank = {TAKEOFF_DEFAULT_ALT}):"),
@@ -738,7 +798,7 @@ impl App {
         );
     }
 
-    fn takeoff_submit(&mut self, text: &str) {
+    pub(crate) fn takeoff_submit(&mut self, text: &str) {
         let text = text.trim();
         let altitude = if text.is_empty() {
             TAKEOFF_DEFAULT_ALT
@@ -779,7 +839,7 @@ impl App {
         );
     }
 
-    fn fence_submit(&mut self, text: &str) {
+    pub(crate) fn fence_submit(&mut self, text: &str) {
         let Some(action) = gf_action_from_letter(&text.trim().to_lowercase()) else {
             state::lock(&self.shared).error("Geofence: type one of n/w/h/r/t");
             return;
@@ -794,7 +854,7 @@ impl App {
     // Screen openers
     // -----------------------------------------------------------------
 
-    fn open_screen(&mut self, screen: Screen) {
+    pub(crate) fn open_screen(&mut self, screen: Screen) {
         self.session.screen = screen;
         match screen {
             Screen::Log => {
@@ -849,6 +909,20 @@ impl App {
                 }
             }
             Screen::Control | Screen::Calibration | Screen::Map => self.configure_streams_async(),
+            Screen::Preflight => {
+                // Calibration ids + GF_ACTION, one PARAM_REQUEST_READ each.
+                let st = state::lock(&self.shared);
+                let missing: Vec<&str> = crate::preflight::CALIBRATION_PARAMS
+                    .iter()
+                    .copied()
+                    .chain(["GF_ACTION"])
+                    .filter(|p| st.param_value(p).is_none())
+                    .collect();
+                drop(st);
+                for p in missing {
+                    commands::request_param(&self.link, p);
+                }
+            }
             Screen::Firmware => self.refresh_firmware_lists(),
             _ => {}
         }
@@ -896,6 +970,20 @@ impl App {
     // -----------------------------------------------------------------
 
     fn process_key(&mut self, key: String) {
+        // [keys] remaps apply only where a key is a command, never while
+        // typing text.
+        let typing = self.session.cmd_active
+            || self.session.confirm.is_some()
+            || self.session.input.is_some()
+            || self.session.search_active
+            || self.session.help_open
+            || (self.session.screen == Screen::Shell && !self.session.sidebar_focused)
+            || (self.session.screen == Screen::Parameters && self.session.param_edit.is_some());
+        let key = match self.settings.keys.get(&key) {
+            Some(mapped) if !typing && mapped.is_empty() => return,
+            Some(mapped) if !typing => mapped.clone(),
+            _ => key,
+        };
         let before = self.session.screen;
         self.dispatch_key(key);
         // A search belongs to the list it was typed on.
@@ -905,6 +993,24 @@ impl App {
     }
 
     fn dispatch_key(&mut self, key: String) {
+        if self.session.help_open {
+            match normalize_vim_key(key).as_str() {
+                "DOWN" => self.session.help_scroll += 1,
+                "UP" => self.session.help_scroll = self.session.help_scroll.saturating_sub(1),
+                "PGDN" => self.session.help_scroll += 10,
+                "PGUP" => self.session.help_scroll = self.session.help_scroll.saturating_sub(10),
+                _ => self.session.help_open = false,
+            }
+            return;
+        }
+        if self.session.cmd_active {
+            if key == "CTRL_C" {
+                self.session.cmd_active = false;
+            } else {
+                self.handle_cmdline_key(&key);
+            }
+            return;
+        }
         if self.session.confirm.is_some() || self.session.input.is_some() || self.session.search_active {
             if key == "CTRL_C" {
                 self.quit();
@@ -929,6 +1035,21 @@ impl App {
             return;
         }
 
+        let param_editing = self.session.screen == Screen::Parameters && self.session.param_edit.is_some();
+
+        if key == ":" && !param_editing {
+            self.open_cmdline();
+            return;
+        }
+        if key == "A" && !param_editing && self.acknowledge_alerts() {
+            return;
+        }
+        if key == "?" && !param_editing {
+            self.session.help_open = true;
+            self.session.help_scroll = 0;
+            return;
+        }
+
         if key == "TAB" {
             if self.session.sidebar_focused {
                 self.session.sidebar_focused = false;
@@ -942,8 +1063,6 @@ impl App {
             self.handle_sidebar_key(&key);
             return;
         }
-
-        let param_editing = self.session.screen == Screen::Parameters && self.session.param_edit.is_some();
 
         if self.session.screen.searchable() && !param_editing {
             match key.as_str() {
@@ -1062,7 +1181,14 @@ impl App {
                     }
                 }
                 if arm {
-                    self.request_confirmation("ARM vehicle? Type YES", Action::Arm);
+                    let checks = {
+                        let st = state::lock(&self.shared);
+                        crate::preflight::checks(&st, &crate::host::lock(&self.sys), &self.settings)
+                    };
+                    self.request_confirmation(
+                        format!("ARM vehicle? Preflight: {} ([y] details). Type YES", crate::preflight::verdict_text(&checks)),
+                        Action::Arm,
+                    );
                 } else {
                     self.request_confirmation("DISARM vehicle? Type YES", Action::Disarm);
                 }
@@ -1348,6 +1474,10 @@ impl App {
                 self.session.param_index = 0;
             }
             "b" => self.request_confirmation("REBOOT PX4? Vehicle will restart. Type YES", Action::Reboot),
+            "D" => self.request_input(
+                format!("Diff parameter file against the vehicle (or two files: A B; relative to {}):", self.settings.param_dir),
+                InputKind::ParamDiff,
+            ),
             "s" => {
                 {
                     let mut st = state::lock(&self.shared);
@@ -1389,7 +1519,7 @@ impl App {
     }
 
     /// `~/` expanded; a bare file name goes in --param-dir.
-    fn resolve_param_path(&self, text: &str) -> std::path::PathBuf {
+    pub(crate) fn resolve_param_path(&self, text: &str) -> std::path::PathBuf {
         let text = text.trim();
         if let Some(rest) = text.strip_prefix("~/") {
             return std::path::Path::new(&std::env::var("HOME").unwrap_or_default()).join(rest);
@@ -1402,7 +1532,7 @@ impl App {
         }
     }
 
-    fn param_save_submit(&mut self, text: &str) {
+    pub(crate) fn param_save_submit(&mut self, text: &str) {
         let path = if text.trim().is_empty() {
             std::path::PathBuf::from(self.default_param_file())
         } else {
@@ -1416,7 +1546,7 @@ impl App {
         }
     }
 
-    fn param_load_submit(&mut self, text: &str) {
+    pub(crate) fn param_load_submit(&mut self, text: &str) {
         if text.trim().is_empty() {
             return;
         }
@@ -1484,7 +1614,7 @@ impl App {
         self.session.param_edit = Some((p.name.clone(), params::format_value(p)));
     }
 
-    fn submit_parameter_edit(&mut self, name: &str, buffer: &str) {
+    pub(crate) fn submit_parameter_edit(&mut self, name: &str, buffer: &str) {
         let parsed = {
             let mut st = state::lock(&self.shared);
             let Some(p) = st.parameters.get(name) else {
@@ -1508,15 +1638,61 @@ impl App {
     }
 }
 
+pub(crate) fn send_goto(link: &Link, st: &mut State, target: GotoTarget) -> bool {
+    match target {
+        GotoTarget::Body(f, r, d, y) => crate::mav::guided::goto_body(link, st, f, r, d, y, false),
+        GotoTarget::Local(n, e, d, y) => crate::mav::guided::goto_local(link, st, n, e, d, y),
+        GotoTarget::Global(la, lo, a, y) => crate::mav::guided::goto_global(link, st, la, lo, a, y),
+    }
+}
+
+/// The per-vehicle periodic work, shared with the fleet view: stream setup
+/// on lock, request / upload timeouts, health latches and the trend
+/// samples. Caller holds the state lock.
+pub(crate) fn service_vehicle(link: &Arc<Link>, st: &mut State, settings: &Settings) {
+    let t = now();
+    // First lock (or a heartbeat recovery): announce ourselves and ask
+    // for streams. Paced, so it runs on a helper thread.
+    if st.vehicle_locked && !st.streams_configured {
+        st.streams_configured = true;
+        let link = link.clone();
+        std::thread::spawn(move || {
+            commands::send_gcs_heartbeat(&link);
+            commands::configure_streams(&link);
+            commands::request_estimator_params(&link);
+        });
+    }
+
+    commands::check_pending_arm(st);
+    params::check_parameter_request(st);
+    params::check_pending_parameter(st);
+    params::process_parameter_load(link, st);
+    modes::check_available_modes_request(st);
+    flightlog::check_flight_log_list(link, st);
+    calibration::check_calibration(st);
+    crate::mav::guided::check_fence_upload(st);
+    crate::mav::mission::check_mission_upload(st);
+    update_health(st, settings.battery_low, settings.battery_critical);
+    if t - st.trends.last_sample >= 1.0 && st.vehicle_locked {
+        st.trends.last_sample = t;
+        let fresh = |last: f64, v: f64| if last > 0.0 && t - last < TELEMETRY_TIMEOUT { v } else { f64::NAN };
+        let battery = if st.battery >= 0.0 { st.battery } else { f64::NAN };
+        let altitude = fresh(st.last_local_pos, -st.local_z);
+        let vibration = fresh(st.last_vibration, st.vibration_x.max(st.vibration_y).max(st.vibration_z));
+        let rx = st.rx_rate;
+        st.trends.sample(battery, altitude, vibration, rx);
+    }
+}
+
 /// Latch link / telemetry / battery health and log only the transitions.
-fn update_health(st: &mut State) {
+fn update_health(st: &mut State, battery_low: f64, battery_critical: f64) {
     let t = now();
 
     let heartbeat_stale = st.last_heartbeat > 0.0 && t - st.last_heartbeat > HEARTBEAT_TIMEOUT;
     if heartbeat_stale && !st.heartbeat_timeout_active {
         st.heartbeat_timeout_active = true;
         st.connected = false;
-        st.error("PX4 HEARTBEAT TIMEOUT");
+        st.alert("PX4 HEARTBEAT TIMEOUT - link lost");
     } else if !heartbeat_stale && st.heartbeat_timeout_active {
         st.heartbeat_timeout_active = false;
         st.connected = true;
@@ -1549,9 +1725,20 @@ fn update_health(st: &mut State) {
         st.info("PREARM check cleared (PX4 stopped reporting it)");
     }
 
+    // EKF: a red verdict always, a degraded one only in the air.
+    let (verdict, color) = crate::ui::dashboard::ekf_summary(st.ekf_flags, st.est_is_estimator_status, &st.ekf_status);
+    let bad = color == crate::ui::RED || (st.armed && color == crate::ui::YELLOW && verdict != "INITIALIZING");
+    if bad && verdict != st.ekf_alert_verdict {
+        st.alert(format!("EKF: {verdict}"));
+        st.ekf_alert_verdict = verdict;
+    } else if !bad && !st.ekf_alert_verdict.is_empty() {
+        st.ekf_alert_verdict.clear();
+        st.info(format!("EKF: {verdict}"));
+    }
+
     if st.battery >= 0.0 {
         let battery = st.battery;
-        if battery <= BATTERY_CRITICAL {
+        if battery <= battery_critical {
             if !st.battery_critical_active {
                 st.battery_critical_active = true;
                 st.failsafe(format!("CRITICAL BATTERY: {battery:.0}%"));
@@ -1561,7 +1748,7 @@ fn update_health(st: &mut State) {
             st.info("Battery recovered above critical threshold");
         }
 
-        if battery <= BATTERY_LOW && battery > BATTERY_CRITICAL {
+        if battery <= battery_low && battery > battery_critical {
             if !st.battery_low_active {
                 st.battery_low_active = true;
                 st.warn(format!("LOW BATTERY: {battery:.0}%"));

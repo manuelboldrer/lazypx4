@@ -145,7 +145,10 @@ fn key_panel(ctx: &Ctx) -> Vec<Line<'static>> {
     if col_width < 34 {
         return Vec::new();
     }
-    let columns: Vec<Vec<Line<'static>>> = KEY_PARAMETER_COLUMNS
+    let columns: Vec<Vec<Line<'static>>> = ctx
+        .app
+        .settings
+        .key_params
         .iter()
         .map(|groups| {
             let mut cells = Vec::new();

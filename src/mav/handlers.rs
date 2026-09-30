@@ -11,7 +11,7 @@ use mavlink::dialects::development::{MavMessage, *};
 
 use crate::config::*;
 use crate::link::{Link, from_char_array};
-use crate::mav::{calibration, flightlog, guided, modes, params, shell};
+use crate::mav::{calibration, flightlog, guided, mission, modes, params, shell};
 use crate::px4mode;
 use crate::state::{self, Shared, State, classify_statustext, now};
 
@@ -316,8 +316,11 @@ fn dispatch(st: &mut State, link: &Link, src_sys: u8, src_comp: u8, msg: &MavMes
         M::LOG_ENTRY(d) => flightlog::handle_log_entry(st, d),
         // Deprecated in favour of _INT, but older PX4 still sends it.
         #[allow(deprecated)]
-        M::MISSION_REQUEST(d) => guided::handle_mission_request(st, link, d.seq, d.mission_type),
-        M::MISSION_REQUEST_INT(d) => guided::handle_mission_request(st, link, d.seq, d.mission_type),
+        M::MISSION_REQUEST(d) => mission_request(st, link, d.seq, d.mission_type),
+        M::MISSION_REQUEST_INT(d) => mission_request(st, link, d.seq, d.mission_type),
+        M::MISSION_ACK(d) if d.mission_type == MavMissionType::MAV_MISSION_TYPE_MISSION => {
+            mission::handle_mission_ack(st, d.mavtype)
+        }
         M::MISSION_ACK(d) => guided::handle_mission_ack(st, d.mavtype, d.mission_type),
         _ => {}
     }
@@ -383,7 +386,33 @@ fn heartbeat(st: &mut State, link: &Link, src_sys: u8, src_comp: u8, d: &HEARTBE
     }
     if mode_now != previous_mode {
         st.info(format!("PX4 MODE: {previous_mode} -> {mode_now}"));
+        // In the air, a mode change nobody here asked for is a failsafe,
+        // an RC switch or another GCS - worth a look either way.
+        let recent_command = now() - link.last_command_at() < MODE_CHANGE_COMMAND_WINDOW;
+        if armed_now && previous_armed && !previous_mode.is_empty() && !recent_command
+            && !expected_mode_change(&previous_mode, &mode_now)
+        {
+            st.alert(format!("MODE CHANGED {previous_mode} -> {mode_now} (not commanded from lazypx4)"));
+        }
     }
+}
+
+fn mission_request(st: &mut State, link: &Link, seq: u16, mission_type: MavMissionType) {
+    if mission_type == MavMissionType::MAV_MISSION_TYPE_MISSION {
+        mission::handle_mission_request(st, link, seq);
+    } else {
+        guided::handle_mission_request(st, link, seq, mission_type);
+    }
+}
+
+/// PX4's own hand-overs at the end of a manoeuvre. A mission ending in an
+/// RTL / LAND item switches to that mode itself; a failsafe that does the
+/// same announces itself ("Failsafe activated") and alerts on its own.
+fn expected_mode_change(from: &str, to: &str) -> bool {
+    matches!(
+        (from, to),
+        ("TAKEOFF", "LOITER") | ("MISSION", "LOITER" | "RTL" | "LAND") | ("RTL", "LAND")
+    )
 }
 
 fn local_position(st: &mut State, x: f32, y: f32, z: f32, vx: f32, vy: f32, vz: f32) {

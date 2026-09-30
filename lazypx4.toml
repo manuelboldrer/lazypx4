@@ -1,0 +1,57 @@
+# lazypx4 settings.
+#
+# Looked up as: --config FILE, else ./lazypx4.toml, else this file in the
+# repo lazypx4 was built from. Every key is optional; command-line flags
+# override the file. Values below are the built-in defaults.
+
+[link]
+# port = 14560                      # UDP port PX4 sends MAVLink to
+# record_tlog = true                # write every session to a .tlog
+
+[paths]
+# tlog_dir = "./px4_tlogs"          # session telemetry (.tlog), see [link] record_tlog
+# log_dir = "./px4_logs"            # downloaded .ulg flight logs
+# param_dir = "./px4_params"        # [s] save / [l] load on the parameter screen
+# param_defaults = "build/px4_sitl_default/parameters.json"
+# map_dir = "./px4_maps"            # satellite snapshots
+# firmware_dir = "./px4_firmware"   # .px4 files for [f]
+# tools_dir = "./Tools"             # px_uploader.py / upload_log.py / ecl_ekf
+# disk_path = "/"                   # filesystem shown on the dashboard HOST line
+# kml = "mission.kml"               # map overlay loaded at start-up
+
+[ros]
+# lidar_topic = "/livox/points"
+# navpath_topic = "/navsat_utm_path"
+# use_sim_time = false
+
+[safety]
+# allow_log_download_while_armed = false
+# battery_low = 30.0                # % - yellow + warning
+# battery_critical = 15.0           # % - red + failsafe event
+
+[alerts]
+# bell = true                       # ring the terminal bell (tmux flags the window)
+
+[fleet]
+# ports = [14560, 14561, 14562]     # what `lazypx4 --fleet` (no list) watches
+
+# The KEY PARAMETERS panel on the parameter screen: heading = [names].
+# Groups are laid out in two columns, in this order. Omit to keep the default.
+# [key_params]
+# FLIGHT = ["MIS_TAKEOFF_ALT", "RTL_RETURN_ALT", "MPC_XY_CRUISE", "MPC_XY_VEL_MAX"]
+# FAILSAFE = ["GF_ACTION", "NAV_DLL_ACT", "NAV_RCL_ACT", "COM_LOW_BAT_ACT"]
+# ESTIMATOR = ["EKF2_HGT_REF", "EKF2_GPS_CTRL", "EKF2_RNG_CTRL"]
+
+# Key remaps: pressed key = key it acts as. "" disables a key. Names are
+# single characters, or ESC ENTER TAB UP DOWN LEFT RIGHT PGUP PGDN HOME END
+# CTRL_X. Never applied while typing (prompts, the NSH shell, search).
+[keys]
+# "K" = ""                          # no kill key - use :kill instead
+
+# `:` command-line aliases. The first word is replaced and any arguments
+# are appended (`:up 5` -> `:takeoff 5`). `!` runs a host command.
+[aliases]
+# up = "takeoff"
+# agent = "!sudo systemctl restart micro-xrce-dds-agent"
+# topics = "!ros2 topic list"
+# top = "nsh top once"

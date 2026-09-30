@@ -5,6 +5,7 @@ pub mod calibration;
 pub mod commands;
 pub mod flightlog;
 pub mod guided;
+pub mod mission;
 pub mod handlers;
 pub mod modes;
 pub mod params;

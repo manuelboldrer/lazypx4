@@ -345,6 +345,40 @@ pub fn parse_param_file(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Differences between two parameter sets (name -> value).
+#[derive(Debug, Default, PartialEq)]
+pub struct ParamDiff {
+    /// (name, left, right) where both have it but the values differ.
+    pub changed: Vec<(String, f64, f64)>,
+    pub only_left: Vec<String>,
+    pub only_right: Vec<String>,
+    pub same: usize,
+}
+
+pub fn same_value(a: f64, b: f64) -> bool {
+    (a - b).abs() <= PARAM_VALUE_EPSILON * a.abs().max(b.abs()).max(1.0)
+}
+
+pub fn diff_parameters(left: &[(String, f64)], right: &[(String, f64)]) -> ParamDiff {
+    let l: std::collections::BTreeMap<&str, f64> = left.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+    let r: std::collections::BTreeMap<&str, f64> = right.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+    let mut d = ParamDiff::default();
+    for (name, &a) in &l {
+        match r.get(name) {
+            Some(&b) if same_value(a, b) => d.same += 1,
+            Some(&b) => d.changed.push((name.to_string(), a, b)),
+            None => d.only_left.push(name.to_string()),
+        }
+    }
+    d.only_right = r.keys().filter(|n| !l.contains_key(*n)).map(|n| n.to_string()).collect();
+    d
+}
+
+/// A parsed parameter file as numbers.
+pub fn file_values(entries: &[(String, String)]) -> Vec<(String, f64)> {
+    entries.iter().filter_map(|(n, v)| Some((n.clone(), v.parse::<f64>().ok()?))).collect()
+}
+
 #[derive(Debug, Default)]
 pub struct LoadPlan {
     pub changes: Vec<(String, f64)>,
@@ -451,6 +485,16 @@ mod tests {
                 ("MPC_ACC_HOR_MAX", "40.0"),
             ]
         );
+    }
+
+    #[test]
+    fn diffs_two_parameter_sets() {
+        let v = |pairs: &[(&str, f64)]| pairs.iter().map(|(n, x)| (n.to_string(), *x)).collect::<Vec<_>>();
+        let d = diff_parameters(&v(&[("A", 1.0), ("B", 2.0), ("C", 0.1)]), &v(&[("A", 1.0), ("B", 3.0), ("D", 4.0), ("C", 0.100000001)]));
+        assert_eq!(d.changed, vec![("B".to_string(), 2.0, 3.0)]);
+        assert_eq!(d.only_left, Vec::<String>::new());
+        assert_eq!(d.only_right, vec!["D".to_string()]);
+        assert_eq!(d.same, 2);
     }
 
     #[test]

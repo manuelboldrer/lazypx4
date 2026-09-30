@@ -25,6 +25,7 @@ venv/
 # lazypx4 runtime output
 px4_logs/
 px4_maps/
+px4_tlogs/
 
 # tests
 tests/

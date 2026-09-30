@@ -793,6 +793,23 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         lines.push(Ln::new().raw(" NAVPATH   ").spans(note.0).line());
     }
 
+    let total = st.mission_upload_items.len();
+    if st.mission_upload_active {
+        lines.push(
+            Ln::new()
+                .raw(" MISSION   ")
+                .fg("uploading", YELLOW)
+                .raw(format!("   item {}/{total}", st.mission_upload_acked_seq + 1))
+                .line(),
+        );
+    } else if st.mission_upload_status == "COMPLETE" {
+        lines.push(Ln::new().raw(" MISSION   ").fg("ACCEPTED by PX4", GREEN).raw(format!("   {total} item(s)")).line());
+    } else if st.mission_upload_status == "ERROR" {
+        lines.push(Ln::new().raw(" MISSION   ").fg(format!("failed: {}", st.mission_upload_error), RED).line());
+    } else if let Some(plan) = &st.plan {
+        lines.push(Ln::new().raw(" MISSION   ").dim(format!("{} item(s) loaded from .plan - [M] upload", plan.items.len())).line());
+    }
+
     let total = st.fence_upload_items.len();
     if st.fence_upload_active {
         lines.push(

@@ -143,8 +143,35 @@ impl Parameter {
     }
 }
 
+/// 1 Hz history for the dashboard sparklines; NaN = no data that second.
+#[derive(Debug, Default)]
+pub struct Trends {
+    pub battery: VecDeque<f64>,
+    pub altitude: VecDeque<f64>,
+    pub vibration: VecDeque<f64>,
+    pub rx_rate: VecDeque<f64>,
+    pub last_sample: f64,
+}
+
+impl Trends {
+    pub fn sample(&mut self, battery: f64, altitude: f64, vibration: f64, rx_rate: f64) {
+        for (q, v) in [
+            (&mut self.battery, battery),
+            (&mut self.altitude, altitude),
+            (&mut self.vibration, vibration),
+            (&mut self.rx_rate, rx_rate),
+        ] {
+            if q.len() >= TREND_SAMPLES {
+                q.pop_front();
+            }
+            q.push_back(v);
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct State {
+    pub trends: Trends,
     pub target_system: u8,
     pub target_component: u8,
     pub vehicle_locked: bool,
@@ -379,6 +406,13 @@ pub struct State {
 
     pub pending_arm: Option<PendingArm>,
 
+    /// Unacknowledged alerts (time, text), oldest first - the flashing
+    /// banner. `alert_bell` asks the main loop to ring the terminal bell.
+    pub alerts: Vec<(String, String)>,
+    pub alert_bell: bool,
+    /// Last EKF verdict an alert was raised for ("" = healthy).
+    pub ekf_alert_verdict: String,
+
     pub heartbeat_timeout_active: bool,
     pub position_timeout_active: bool,
     pub gps_timeout_active: bool,
@@ -469,6 +503,15 @@ pub struct State {
     pub wp_queue_phase_started_at: f64,
 
     /// Geofence upload ([O]): (lat, lon, vertex count of its polygon).
+    /// A loaded QGC .plan (its overlay is also in `kml`).
+    pub plan: Option<crate::geo::Plan>,
+    pub mission_upload_active: bool,
+    pub mission_upload_items: Vec<crate::geo::PlanItem>,
+    pub mission_upload_acked_seq: i32,
+    pub mission_upload_started_at: f64,
+    pub mission_upload_status: String,
+    pub mission_upload_error: String,
+
     pub fence_upload_active: bool,
     pub fence_upload_items: Vec<(f64, f64, u16)>,
     pub fence_upload_acked_seq: i32,
@@ -541,9 +584,27 @@ impl State {
         match level {
             Level::Warn => self.warning_count += 1,
             Level::Error => self.error_count += 1,
-            Level::Failsafe => self.failsafe_count += 1,
+            Level::Failsafe => {
+                self.failsafe_count += 1;
+                let text = self.events.back().map(|e| e.message.clone()).unwrap_or_default();
+                self.raise_alert(text);
+            }
             _ => {}
         }
+    }
+
+    /// Log an error and raise it on the banner + bell.
+    pub fn alert(&mut self, m: impl AsRef<str>) {
+        self.add_log(Level::Error, &m);
+        self.raise_alert(m.as_ref().to_string());
+    }
+
+    fn raise_alert(&mut self, text: String) {
+        if self.alerts.len() >= MAX_ALERTS {
+            self.alerts.remove(0);
+        }
+        self.alerts.push((chrono::Local::now().format("%H:%M:%S").to_string(), text));
+        self.alert_bell = true;
     }
 
     pub fn info(&mut self, m: impl AsRef<str>) {
