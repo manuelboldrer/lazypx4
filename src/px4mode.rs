@@ -93,6 +93,13 @@ fn interpret_px4_mode(base_mode: u8, custom_mode: u32) -> &'static str {
         };
     }
 
+    // PX4 derives base_mode from vehicle_control_mode, so in OFFBOARD with
+    // position/velocity setpoints it reports only STABILIZE (no AUTO/GUIDED),
+    // e.g. base_mode 145 when armed. Decode it from main mode alone.
+    if main == OFFBOARD {
+        return "OFFBOARD";
+    }
+
     let auto_bits = AUTO_ENABLED | STABILIZE_ENABLED | GUIDED_ENABLED;
     if base_mode & auto_bits == auto_bits {
         if main == AUTO {
@@ -106,9 +113,6 @@ fn interpret_px4_mode(base_mode: u8, custom_mode: u32) -> &'static str {
                 AUTO_RTGS => "RTGS",
                 _ => "UNKNOWN",
             };
-        }
-        if main == OFFBOARD {
-            return "OFFBOARD";
         }
     }
     "UNKNOWN"
@@ -124,5 +128,11 @@ mod tests {
             let custom = (main << 16) | (sub << 24);
             assert_eq!(mode_string(12, flags, custom), name);
         }
+    }
+
+    #[test]
+    fn offboard_without_auto_flags() {
+        // What PX4 actually sends while armed in OFFBOARD (position control).
+        assert_eq!(mode_string(12, SAFETY_ARMED | STABILIZE_ENABLED | CUSTOM_MODE_ENABLED, OFFBOARD << 16), "OFFBOARD");
     }
 }
