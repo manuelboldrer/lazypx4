@@ -40,6 +40,10 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     param_defaults: Option<String>,
 
+    /// Directory for parameter files saved / loaded on the parameter screen
+    #[arg(long, default_value = "./px4_params", value_name = "DIR")]
+    param_dir: String,
+
     /// Permit starting a flight-log download while the vehicle is armed
     #[arg(long)]
     allow_log_download_while_armed: bool,
@@ -102,6 +106,7 @@ fn main() -> std::process::ExitCode {
         port: cli.port,
         log_dir: cli.log_dir,
         param_defaults_file: cli.param_defaults,
+        param_dir: cli.param_dir,
         allow_log_download_while_armed: cli.allow_log_download_while_armed,
         map_dir: cli.map_dir,
         disk_path: cli.disk_path,

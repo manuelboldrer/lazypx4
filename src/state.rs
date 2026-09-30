@@ -397,6 +397,11 @@ pub struct State {
     pub parameter_defaults: HashMap<String, f64>,
     pub parameter_full_list_requested: bool,
     pub parameter_set_pending: Option<(String, f64, f64)>,
+    /// Bulk load from a file ([l] on the parameter screen): the PARAM_SETs
+    /// still to send, one at a time, each after the previous one's echo.
+    pub param_load_queue: VecDeque<(String, f64)>,
+    pub param_load_total: usize,
+    pub param_load_failed: Vec<String>,
 
     // Standard Modes Protocol (AVAILABLE_MODES), keyed by mode_index.
     pub custom_modes: BTreeMap<u8, CustomMode>,

@@ -271,7 +271,151 @@ pub fn check_pending_parameter(st: &mut State) {
     if let Some(p) = st.parameters.get_mut(&name) {
         p.pending = false;
     }
+    if st.param_load_total > 0 {
+        st.param_load_failed.push(name.clone());
+    }
     st.error(format!("PARAM_SET not confirmed by PX4: {name}"));
+}
+
+// ---------------------------------------------------------------------
+// Parameter files: save / load
+// ---------------------------------------------------------------------
+
+/// Write every received parameter in QGroundControl's `.params` format
+/// (`sysid compid NAME value type`, tab separated), which QGC, MAVProxy and
+/// MAVSDK all read back.
+pub fn save_parameters(st: &State, path: &std::path::Path, target: (u8, u8)) -> Result<usize, String> {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "# Onboard parameters for Vehicle {}", target.0);
+    let _ = writeln!(out, "# Saved by lazypx4 {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    let _ = writeln!(out, "#");
+    let _ = writeln!(out, "# Vehicle-Id Component-Id Name Value Type");
+    let mut n = 0;
+    for p in st.parameter_order.iter().filter_map(|name| st.parameters.get(name)) {
+        let value = if is_integer(p.param_type) {
+            format!("{}", p.value.round() as i64)
+        } else {
+            // Shortest text that round-trips the f32 PX4 actually stores.
+            format!("{}", p.value as f32)
+        };
+        let t = if p.param_type == 0 { 9 } else { p.param_type };
+        let _ = writeln!(out, "{}\t{}\t{}\t{}\t{}", target.0, target.1, p.name, value, t);
+        n += 1;
+    }
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(path, out).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(n)
+}
+
+/// `(NAME, value text)` pairs from a parameter file. Accepts, line by line:
+/// QGC `.params` (`1 1 NAME value type`), MAVProxy / plain `NAME value` or
+/// `NAME,value`, `param set NAME value` (NSH scripts), and YAML-style
+/// `NAME: value` (e.g. a tmux session's custom_config.yaml - group headers
+/// with no value are skipped). `#` starts a comment.
+pub fn parse_param_file(text: &str) -> Vec<(String, String)> {
+    let is_name = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 16
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+    };
+    let is_number = |s: &str| s.parse::<f64>().is_ok_and(f64::is_finite);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let line = line.strip_prefix("param set ").unwrap_or(line);
+        let fields: Vec<&str> = line
+            .split(|c: char| c.is_whitespace() || c == ',' || c == ':')
+            .filter(|f| !f.is_empty())
+            .collect();
+        let pair = match fields.as_slice() {
+            // QGC: sysid compid NAME value [type]
+            [a, b, name, value, ..] if is_number(a) && is_number(b) && is_name(name) => Some((*name, *value)),
+            [name, value, ..] if is_name(name) => Some((*name, *value)),
+            _ => None,
+        };
+        if let Some((name, value)) = pair
+            && is_number(value) {
+                out.push((name.to_string(), value.to_string()));
+            }
+    }
+    out
+}
+
+#[derive(Debug, Default)]
+pub struct LoadPlan {
+    pub changes: Vec<(String, f64)>,
+    pub unchanged: usize,
+    /// In the file but not on this vehicle / firmware.
+    pub unknown: Vec<String>,
+    /// Present but not a valid value for its type (e.g. 2.5 for an int).
+    pub invalid: Vec<String>,
+}
+
+/// Compare a parsed file against the vehicle's current values.
+pub fn plan_parameter_load(st: &State, entries: &[(String, String)]) -> LoadPlan {
+    let mut plan = LoadPlan::default();
+    for (name, text) in entries {
+        let Some(p) = st.parameters.get(name) else {
+            plan.unknown.push(name.clone());
+            continue;
+        };
+        let Ok(value) = parse_value(text, p) else {
+            plan.invalid.push(name.clone());
+            continue;
+        };
+        let t = if p.param_type == 0 { 9 } else { p.param_type };
+        // What PX4 will store (and echo back): floats go through f32.
+        let value = decode(encode(value, t), t);
+        if value == p.value {
+            plan.unchanged += 1;
+        } else if let Some(pos) = plan.changes.iter().position(|(n, _)| n == name) {
+            plan.changes[pos].1 = value; // last occurrence in the file wins
+        } else {
+            plan.changes.push((name.clone(), value));
+        }
+    }
+    plan
+}
+
+pub fn start_parameter_load(st: &mut State, changes: Vec<(String, f64)>) {
+    st.param_load_total = changes.len();
+    st.param_load_failed.clear();
+    st.param_load_queue = changes.into();
+    st.command(format!("PARAM LOAD: setting {} parameter(s)", st.param_load_total));
+}
+
+pub fn param_load_active(st: &State) -> bool {
+    st.param_load_total > 0
+}
+
+/// Send the next queued PARAM_SET once the previous one is confirmed or has
+/// timed out (so PX4 is never flooded and every value gets an echo check).
+pub fn process_parameter_load(link: &Link, st: &mut State) {
+    if st.param_load_total == 0 || st.parameter_set_pending.is_some() {
+        return;
+    }
+    if let Some((name, value)) = st.param_load_queue.pop_front() {
+        if !send_parameter_set(link, st, &name, value) {
+            st.param_load_failed.push(name);
+        }
+        return;
+    }
+    let total = st.param_load_total;
+    let failed = std::mem::take(&mut st.param_load_failed);
+    st.param_load_total = 0;
+    if failed.is_empty() {
+        st.info(format!("PARAM LOAD done: {total}/{total} confirmed"));
+    } else {
+        st.warn(format!(
+            "PARAM LOAD done: {}/{total} confirmed, failed: {}",
+            total - failed.len(),
+            failed.join(" ")
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -284,6 +428,29 @@ mod tests {
             assert_eq!(decode(encode(value, t), t), value);
         }
         assert_eq!(decode(encode(2.5, 9), 9), 2.5);
+    }
+
+    #[test]
+    fn parses_qgc_plain_nsh_and_yaml_param_files() {
+        let text = "# Onboard parameters\n\
+                    1\t1\tMPC_XY_VEL_MAX\t5\t9\n\
+                    COM_OBL_RC_ACT 3\n\
+                    RTL_TYPE,1\n\
+                    param set NAV_DLL_ACT 0\n\
+                    velocity_limits:\n  MPC_ACC_HOR_MAX: 40.0     #5 [m/s^2] comment\n\
+                    launch:\n  PX4_GZ_WORLD: cylinder_forest\n";
+        let got = parse_param_file(text);
+        let names: Vec<(&str, &str)> = got.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        assert_eq!(
+            names,
+            [
+                ("MPC_XY_VEL_MAX", "5"),
+                ("COM_OBL_RC_ACT", "3"),
+                ("RTL_TYPE", "1"),
+                ("NAV_DLL_ACT", "0"),
+                ("MPC_ACC_HOR_MAX", "40.0"),
+            ]
+        );
     }
 
     #[test]

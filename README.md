@@ -29,7 +29,7 @@ for the other case: PX4 over SSH, from a companion computer, or across a fleet
 | `m` | Flight modes (legacy + PX4 v1.15+ Standard Modes) |
 | `n` | Mission map — see below |
 | `c` / `r` | Control setpoints / RC channels, wind, actuator outputs |
-| `p` | Parameters — browse, search, edit, decoded values, key-parameter panel |
+| `p` | Parameters — browse, search, edit, decoded values, key-parameter panel, `s` save / `l` load a param file |
 | `s` | Sensor calibration |
 | `l` | Flight logs — download `.ulg`, upload to flight review, `ecl_ekf` check |
 | `g` | Event log |
@@ -99,6 +99,12 @@ mavlink start -u 14560 -o 14560 -t <lazypx4-host-ip> -m onboard -r 4000000
 
 For serial/USB, bridge with `mavlink-router` or
 `mavproxy.py --master=/dev/ttyACM0 --out=udp:127.0.0.1:14560`.
+
+On the parameter screen `s` saves every parameter in QGroundControl's
+`.params` format (to `--param-dir`, default `./px4_params`) and `l` loads one
+back. `l` also accepts MAVProxy-style `NAME VALUE`, NSH `param set NAME VALUE`
+and YAML `NAME: VALUE` files. It shows only the values that differ and, after
+`type YES`, sets them one at a time, checking each value PX4 echoes back.
 
 Parameter descriptions come from a bundled PX4 v1.17 `parameters.json`; pass
 `--param-defaults <build>/parameters.json` to match your firmware and enable

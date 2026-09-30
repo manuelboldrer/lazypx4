@@ -99,6 +99,8 @@ pub enum Action {
     Offboard(bool),
     SetMode(ModeOption),
     SetParam(String, f64),
+    /// Bulk PARAM_SETs from a parameter file.
+    LoadParams(Vec<(String, f64)>),
     Calibrate(&'static str),
     Goto(GotoTarget),
     /// Fly a waypoint queue / coverage path; previewed on the map while the
@@ -129,6 +131,8 @@ pub enum InputKind {
     WpQueue,
     Coverage,
     LidarTopic,
+    ParamSave,
+    ParamLoad,
 }
 
 pub struct Confirm {
@@ -439,6 +443,7 @@ impl App {
         commands::check_pending_arm(&mut st);
         params::check_parameter_request(&mut st);
         params::check_pending_parameter(&mut st);
+        params::process_parameter_load(&self.link, &mut st);
         modes::check_available_modes_request(&mut st);
         flightlog::check_flight_log_list(&self.link, &mut st);
         calibration::check_calibration(&mut st);
@@ -511,13 +516,15 @@ impl App {
                     InputKind::WpQueue => self.wp_queue_submit(&input.buffer),
                     InputKind::Coverage => self.coverage_submit(&input.buffer),
                     InputKind::LidarTopic => self.lidar_topic_submit(&input.buffer),
+                    InputKind::ParamSave => self.param_save_submit(&input.buffer),
+                    InputKind::ParamLoad => self.param_load_submit(&input.buffer),
                 }
             }
             "BACKSPACE" => {
                 input.buffer.pop();
             }
             k if is_text(k)
-                && input.buffer.chars().count() < 64 => {
+                && input.buffer.chars().count() < 256 => {
                     input.buffer.push_str(k);
                 }
             _ => {}
@@ -658,6 +665,9 @@ impl App {
             Action::SetMode(option) => modes::confirm_mode_option(link, shared, &option),
             Action::SetParam(name, value) => {
                 params::send_parameter_set(link, &mut state::lock(shared), &name, value);
+            }
+            Action::LoadParams(changes) => {
+                params::start_parameter_load(&mut state::lock(shared), changes);
             }
             Action::Calibrate(kind) => {
                 calibration::send_calibration(link, shared, kind);
@@ -1338,8 +1348,121 @@ impl App {
                 self.session.param_index = 0;
             }
             "b" => self.request_confirmation("REBOOT PX4? Vehicle will restart. Type YES", Action::Reboot),
+            "s" => {
+                {
+                    let mut st = state::lock(&self.shared);
+                    if !st.parameters_complete {
+                        st.warn("Save: wait for the full parameter list ([r] to request it)");
+                        return;
+                    }
+                }
+                let default = self.default_param_file();
+                self.request_input(format!("Save parameters to (blank = {default}):"), InputKind::ParamSave);
+            }
+            "l" => {
+                let mut st = state::lock(&self.shared);
+                if !st.parameters_complete {
+                    st.warn("Load: wait for the full parameter list ([r] to request it)");
+                    return;
+                }
+                if params::param_load_active(&st) {
+                    st.warn("A parameter load is already running");
+                    return;
+                }
+                drop(st);
+                self.request_input(
+                    format!("Load parameters from (.params / NAME VALUE / NAME: VALUE yaml; relative to {}):", self.settings.param_dir),
+                    InputKind::ParamLoad,
+                );
+            }
             _ => {}
         }
+    }
+
+    fn default_param_file(&self) -> String {
+        let (sysid, _) = self.link.target();
+        format!(
+            "{}/params_sys{sysid}_{}.params",
+            self.settings.param_dir.trim_end_matches('/'),
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        )
+    }
+
+    /// `~/` expanded; a bare file name goes in --param-dir.
+    fn resolve_param_path(&self, text: &str) -> std::path::PathBuf {
+        let text = text.trim();
+        if let Some(rest) = text.strip_prefix("~/") {
+            return std::path::Path::new(&std::env::var("HOME").unwrap_or_default()).join(rest);
+        }
+        let path = std::path::PathBuf::from(text);
+        if path.is_absolute() || text.starts_with("./") || text.starts_with("../") || path.exists() {
+            path
+        } else {
+            std::path::Path::new(&self.settings.param_dir).join(path)
+        }
+    }
+
+    fn param_save_submit(&mut self, text: &str) {
+        let path = if text.trim().is_empty() {
+            std::path::PathBuf::from(self.default_param_file())
+        } else {
+            self.resolve_param_path(text)
+        };
+        let target = self.link.target();
+        let mut st = state::lock(&self.shared);
+        match params::save_parameters(&st, &path, target) {
+            Ok(n) => st.info(format!("Saved {n} parameters to {}", path.display())),
+            Err(e) => st.error(format!("Parameter save failed: {e}")),
+        }
+    }
+
+    fn param_load_submit(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let path = self.resolve_param_path(text);
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                state::lock(&self.shared).error(format!("Parameter load failed: {}: {e}", path.display()));
+                return;
+            }
+        };
+        let entries = params::parse_param_file(&contents);
+        let plan = {
+            let st = state::lock(&self.shared);
+            params::plan_parameter_load(&st, &entries)
+        };
+        let file = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let mut st = state::lock(&self.shared);
+        if entries.is_empty() {
+            st.warn(format!("{file}: no NAME/value lines found"));
+            return;
+        }
+        if !plan.unknown.is_empty() {
+            st.warn(format!("{file}: not on this vehicle, skipped: {}", plan.unknown.join(" ")));
+        }
+        if !plan.invalid.is_empty() {
+            st.warn(format!("{file}: invalid value for the param type, skipped: {}", plan.invalid.join(" ")));
+        }
+        if plan.changes.is_empty() {
+            st.info(format!("{file}: all {} parameter(s) already match - nothing to set", plan.unchanged));
+            return;
+        }
+        for (name, value) in &plan.changes {
+            let old = st.parameters.get(name).map(params::format_value).unwrap_or_default();
+            st.info(format!("  {name}: {old} -> {}", params::fmt_g(*value, 9)));
+        }
+        drop(st);
+        let n = plan.changes.len();
+        self.request_confirmation(
+            format!(
+                "Load {file}: set {n} changed parameter(s) ({} unchanged, {} skipped - see event log [g])? Type YES",
+                plan.unchanged,
+                plan.unknown.len() + plan.invalid.len()
+            ),
+            Action::LoadParams(plan.changes),
+        );
     }
 
     fn start_parameter_edit(&mut self) {
@@ -1349,6 +1472,10 @@ impl App {
             return;
         }
         let p = visible[self.session.param_index.min(visible.len() - 1)];
+        if params::param_load_active(&st) {
+            st.warn("Wait for the running parameter load to finish");
+            return;
+        }
         if p.pending {
             let name = p.name.clone();
             st.warn(format!("{name} is already waiting for PX4 confirmation"));

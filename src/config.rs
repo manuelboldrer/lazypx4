@@ -16,6 +16,8 @@ pub struct Settings {
     /// Optional PX4 `parameters.json` - enables the "changed from default"
     /// view and replaces the bundled parameter descriptions.
     pub param_defaults_file: Option<String>,
+    /// Default directory for [s] saved / [l] loaded parameter files.
+    pub param_dir: String,
     /// Refuse to start a flight-log transfer while armed unless set.
     pub allow_log_download_while_armed: bool,
     /// Directory satellite-image snapshots are written to.

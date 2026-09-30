@@ -283,7 +283,7 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
     match screen {
         Screen::Dashboard => (dashboard::draw(ctx), "[a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old o[F]fboard [m]ode · TAB panels · q quit".into()),
         Screen::ModeSelect => (lists::modes(ctx), "↑↓/jk select · ENTER set mode · [r] re-request · / search · [m] back".into()),
-        Screen::Parameters => (lists::parameters(ctx), "ENTER edit · [v] ALL/CHANGED · [r] refresh · [b] reboot · / search · [p] back".into()),
+        Screen::Parameters => (lists::parameters(ctx), "ENTER edit · [v] ALL/CHANGED · [r] refresh · [s] save · [l] load file · [b] reboot · / search · [p] back".into()),
         Screen::Log => (lists::event_log(ctx), "↑↓ scroll · PGUP/PGDN page · [c] clear · / search · [g] back".into()),
         Screen::FlightLogs => (
             lists::flight_logs(ctx),
