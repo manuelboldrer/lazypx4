@@ -8,9 +8,10 @@ Fly and monitor PX4 drones from a terminal — no mouse, no GUI, works over SSH.
 
 ## Why
 
-QGroundControl is great when you have one drone, a screen and a mouse.
-lazypx4 is for everything else: logged into a companion computer over SSH,
-watching several drones at once, or working on a robot with no display.
+lazypx4 is built for a faster workflow. Everything is one keypress away in a
+clean, good-looking terminal interface — no mouse, no clicking through menus.
+It's light enough to run one per robot, so going from one drone to a whole
+fleet is just another terminal pane.
 
 It's a small program in the spirit of [lazygit](https://github.com/jesseduffield/lazygit)
 and [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by
