@@ -349,8 +349,9 @@ fn dispatch(st: &mut State, link: &Link, src_sys: u8, src_comp: u8, msg: &MavMes
 
 fn heartbeat(st: &mut State, link: &Link, src_sys: u8, src_comp: u8, d: &HEARTBEAT_DATA) {
     let autopilot = d.autopilot as u32;
-    if autopilot == MAV_AUTOPILOT_INVALID {
-        // Another GCS / companion component, not the vehicle.
+    if autopilot == MAV_AUTOPILOT_INVALID || src_comp != MAV_COMP_ID_AUTOPILOT1 {
+        // Another GCS / companion component, not the vehicle - including
+        // e.g. a mocap ESP whose heartbeat PX4 forwards (MAV_x_FORWARD).
         return;
     }
     if st.vehicle_locked && src_sys != st.target_system {
