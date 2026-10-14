@@ -382,6 +382,7 @@ pub fn flight_logs(ctx: &Ctx) -> Vec<Line<'static>> {
     // Upload / EKF-check job status goes below the list, rows reserved.
     let mut jobs = super::hostui::job_panel(ctx, crate::jobs::JobKind::UlogUpload);
     jobs.extend(super::hostui::job_panel(ctx, crate::jobs::JobKind::EclEkf));
+    jobs.extend(super::hostui::job_panel(ctx, crate::jobs::JobKind::UlogCsv));
 
     if st.flight_logs.is_empty() {
         lines.push(dim_line(if st.flight_log_list_requested_at > 0.0 {

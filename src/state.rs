@@ -169,6 +169,21 @@ impl Trends {
     }
 }
 
+/// An external vision / mocap position (NED, m) and when it was sampled.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VisionPos {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub updated: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UorbRate {
+    pub hz: u32,
+    pub updated: f64,
+}
+
 #[derive(Debug, Default)]
 pub struct State {
     pub trends: Trends,
@@ -452,6 +467,23 @@ pub struct State {
     pub shell_line: crate::mav::shell::ShellLine,
     /// The command just sent, while its echo is still expected back.
     pub shell_echo: Option<crate::mav::shell::EchoFilter>,
+    /// `uorb top` rates by topic name (instance > 0 as "name/1").
+    pub uorb_rates: BTreeMap<String, UorbRate>,
+    /// When the last dashboard `uorb top -1` poll went out; its output is
+    /// kept out of the shell screen until UORB_RATE_PROBE_WINDOW passes.
+    pub uorb_probe_sent_at: f64,
+    /// Rate topics that have reached UORB_RATE_OK (so a drop means
+    /// something - e.g. the mocap rigid body was lost), and those that are
+    /// below it again right now.
+    pub uorb_tracked: std::collections::BTreeSet<String>,
+    pub uorb_lost: std::collections::BTreeSet<String>,
+    /// External vision / mocap positions by source: a uORB topic (from the
+    /// shell `listener` poll) or a forwarded MAVLink message name.
+    pub vision_pos: BTreeMap<String, VisionPos>,
+    /// The topic a `listener` reply currently being parsed is for.
+    pub uorb_listen_topic: String,
+    /// Its "timestamp: ... (A seconds ago)", until the position line.
+    pub uorb_listen_age: Option<f64>,
 
     // Flight logs.
     pub flight_logs: BTreeMap<u16, FlightLogEntry>,

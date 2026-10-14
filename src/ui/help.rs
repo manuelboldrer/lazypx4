@@ -80,6 +80,7 @@ fn screen_keys(screen: Screen) -> (Keys, bool) {
             ("ENTER", "download the selected log"),
             ("u", "upload the last download to flight review"),
             ("a", "ecl_ekf check of the last download"),
+            ("c", "export the last download's vision / mocap / EKF topics to CSV"),
             ("r", "refresh the list"),
             ("x / ESC", "cancel a transfer"),
             ("/ n N", "search"),

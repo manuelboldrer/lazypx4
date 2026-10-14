@@ -646,6 +646,42 @@ impl App {
         }
     }
 
+    /// `:export` / [c]: a .ulg's `topics` (none = EXPORT_ULOG_TOPICS, "all"
+    /// = every topic) or a .tlog's position messages, to CSV.
+    pub(crate) fn export_csv(&mut self, path: Option<String>, topics: Vec<String>) {
+        let Some(path) = path else {
+            return state::lock(&self.shared).warn("Nothing to export: give a .ulg / .tlog, or download a flight log first ([l], ENTER)");
+        };
+        let path = std::path::PathBuf::from(path);
+        if !path.is_file() {
+            return state::lock(&self.shared).error(format!("{}: no such file", path.display()));
+        }
+        if path.extension().is_some_and(|e| e == "tlog") {
+            let shared = self.shared.clone();
+            std::thread::spawn(move || {
+                let result = crate::export::tlog_to_csv(&path);
+                let mut st = state::lock(&shared);
+                match result {
+                    Ok((dir, files)) => {
+                        let list: Vec<String> = files.iter().map(|(f, n)| format!("{f} ({n})")).collect();
+                        st.info(format!("CSV export: {} -> {}", dir.display(), list.join(", ")));
+                    }
+                    Err(e) => st.error(format!("CSV export of {}: {e}", path.display())),
+                }
+            });
+            return;
+        }
+        if crate::jobs::running(&self.jobs) {
+            return state::lock(&self.shared).warn("A background job is already running");
+        }
+        let topics = match topics.as_slice() {
+            [all] if all == "all" => Vec::new(),
+            [] => EXPORT_ULOG_TOPICS.iter().map(|t| t.to_string()).collect(),
+            _ => topics,
+        };
+        crate::jobs::start_ulog_csv(&self.jobs, &self.shared, &self.settings.tools_dir, &path, &topics);
+    }
+
     /// [u] upload / [a] EKF check on the last completed download.
     pub(crate) fn upload_or_analyze(&mut self, upload: bool, path: Option<String>) {
         if crate::jobs::running(&self.jobs) {

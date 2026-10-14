@@ -298,7 +298,7 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
         Screen::Log => (lists::event_log(ctx), "↑↓ scroll · PGUP/PGDN page · [c] clear · / search · [g] back".into()),
         Screen::FlightLogs => (
             lists::flight_logs(ctx),
-            "ENTER download · [u] upload last to web · [a] EKF check · [r] refresh · ESC/x cancel · [l] back".into(),
+            "ENTER download · [u] upload last to web · [a] EKF check · [c] CSV · [r] refresh · ESC/x cancel · [l] back".into(),
         ),
         Screen::Shell => (lists::shell(ctx), "ENTER run · ↑↓ history · ←→ edit · PGUP/PGDN scroll · CTRL-C interrupt · CTRL-L clear · ESC panels".into()),
         Screen::Control => (other::control(ctx), "[r] re-request streams · [c] back · ESC panels".into()),

@@ -93,6 +93,7 @@ impl App {
             ("mission", 1) => cmdline::prefix_matches(word, ["upload"]),
             ("wp", 1) => cmdline::prefix_matches(word, ["seq", "rand", "stop"]),
             ("kml", 1) => cmdline::complete_path(word, "."),
+            ("export", 1) => cmdline::complete_path(word, &self.settings.log_dir),
             ("diff", 1 | 2) => cmdline::complete_path(word, &self.settings.param_dir),
             ("replay", 1) => cmdline::prefix_matches(word, ["pause", "resume", "speed"]),
             ("help", 1) => cmdline::prefix_matches(word, COMMANDS.iter().map(|c| c.name)),
@@ -320,6 +321,17 @@ impl App {
                     (None, None) => "Telemetry recording is off ([link] record_tlog / --no-tlog)".into(),
                 };
                 state::lock(&self.shared).info(text);
+            }
+            "export" => {
+                let (file, topics) = match args_v.split_first() {
+                    Some((f, rest)) if f.contains('.') || f.contains('/') => (Some(f.to_string()), rest),
+                    _ => (None, args_v.as_slice()),
+                };
+                let file = file.or_else(|| {
+                    let st = state::lock(&self.shared);
+                    (st.dl_status == "COMPLETE").then(|| st.dl_path.clone())
+                });
+                self.export_csv(file, topics.iter().map(|t| t.to_string()).collect());
             }
             "diff" if !args_v.is_empty() && args_v.len() <= 2 => self.cmd_param_diff(args_v[0], args_v.get(1).copied()),
             "quit" => {

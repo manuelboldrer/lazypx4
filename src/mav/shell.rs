@@ -4,10 +4,10 @@
 
 use mavlink::dialects::development::{self as mav, MavMessage, SerialControlDev, SerialControlFlag};
 
-use crate::config::SHELL_MAX_LINES;
+use crate::config::{SHELL_MAX_LINES, UORB_RATE_PROBE_WINDOW};
 use crate::link::Link;
 use crate::mav::handlers::push_bounded;
-use crate::state::State;
+use crate::state::{State, UorbRate, now};
 
 fn serial_control(link: &Link, flags: SerialControlFlag, chunk: &[u8]) -> bool {
     let mut data = [0u8; 70];
@@ -86,6 +86,60 @@ impl EchoFilter {
         }
         (Some(line), false)
     }
+}
+
+/// Ask for the publish rate of `topics` (substring filters, as `uorb top`
+/// takes them). The reply is parsed by [`parse_uorb_top_row`] and kept off
+/// the shell screen.
+pub fn probe_uorb_rates(link: &Link, st: &mut State, topics: &[String]) -> bool {
+    st.uorb_probe_sent_at = now();
+    // `-1` plus more than one filter also lists matching topics at 0 Hz.
+    let mut cmds = format!("uorb top -1 {}\n", topics.join(" "));
+    for topic in topics {
+        cmds += &format!("listener {topic}\n");
+    }
+    send_shell_raw(link, cmds.as_bytes())
+}
+
+/// `listener` output: "TOPIC: name", then "timestamp: N (A seconds ago)"
+/// and "position: [x, y, z]" for odometry topics.
+fn parse_listener_line(st: &mut State, line: &str) {
+    let line = line.trim();
+    if let Some(rest) = line.strip_prefix("TOPIC: ") {
+        st.uorb_listen_topic = rest.split_whitespace().next().unwrap_or_default().to_string();
+        st.uorb_listen_age = None;
+        return;
+    }
+    if st.uorb_listen_topic.is_empty() {
+        return;
+    }
+    if let Some(rest) = line.strip_prefix("position: [") {
+        let v: Vec<f64> = rest.trim_end_matches(']').split(',').filter_map(|n| n.trim().parse().ok()).collect();
+        if let [x, y, z] = v[..] {
+            let topic = std::mem::take(&mut st.uorb_listen_topic);
+            let updated = now() - st.uorb_listen_age.take().unwrap_or(0.0);
+            st.vision_pos.insert(topic, crate::state::VisionPos { x, y, z, updated });
+        }
+    } else if let Some(age) = line
+        .strip_prefix("timestamp: ")
+        .and_then(|r| r.split_once('('))
+        .and_then(|(_, r)| r.strip_suffix(" seconds ago)"))
+        .and_then(|a| a.trim().parse::<f64>().ok())
+    {
+        st.uorb_listen_age = Some(age);
+    }
+}
+
+/// One `uorb top` table row: "NAME INST #SUB RATE #Q SIZE".
+fn parse_uorb_top_row(line: &str) -> Option<(String, u32)> {
+    let cols: Vec<&str> = line.split_whitespace().collect();
+    let [name, nums @ ..] = cols.as_slice() else { return None };
+    if nums.len() != 5 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let nums: Vec<u32> = nums.iter().map(|n| n.parse().ok()).collect::<Option<_>>()?;
+    let key = if nums[0] == 0 { name.to_string() } else { format!("{name}/{}", nums[0]) };
+    Some((key, nums[2]))
 }
 
 pub fn send_shell_raw(link: &Link, bytes: &[u8]) -> bool {
@@ -186,8 +240,17 @@ pub fn handle_serial_control(st: &mut State, d: &mav::SERIAL_CONTROL_DATA) {
     let text = String::from_utf8_lossy(&d.data[..count]).into_owned();
     st.shell_active = true;
 
+    let probing = now() - st.uorb_probe_sent_at < UORB_RATE_PROBE_WINDOW;
     for ch in text.chars() {
         let Some(line) = st.shell_line.feed(ch) else { continue };
+        // Rows from any `uorb top`, the dashboard's poll or a typed one.
+        if let Some((topic, hz)) = parse_uorb_top_row(&line) {
+            st.uorb_rates.insert(topic, UorbRate { hz, updated: now() });
+        }
+        parse_listener_line(st, &line);
+        if probing {
+            continue;
+        }
         let line = match st.shell_echo.take() {
             None => Some(line),
             Some(mut filter) => {
@@ -256,6 +319,34 @@ mod tests {
         assert_eq!(filtered("ver", &["pxh> ver", "ver", "HW arch"]), vec!["pxh> ver", "HW arch"]);
         // SITL: both echoes on one line.
         assert_eq!(filtered("ver", &["pxh> verver", "HW arch"]), vec!["pxh> ver", "HW arch"]);
+    }
+
+    #[test]
+    fn uorb_top_rows() {
+        let row = |l| parse_uorb_top_row(l);
+        assert_eq!(row("vehicle_visual_odometry      0    3  100  1  112 "), Some(("vehicle_visual_odometry".into(), 100)));
+        assert_eq!(row("sensor_accel                 1    2  400  8   48"), Some(("sensor_accel/1".into(), 400)));
+        assert_eq!(row("TOPIC NAME                 INST #SUB RATE #Q SIZE"), None);
+        assert_eq!(row("update: 1s, topics: 2, total publications: 100, 11.2 kB/s"), None);
+        assert_eq!(row("nsh> uorb top -1 vehicle_visual_odometry vehicle_mocap_odometry"), None);
+    }
+
+    #[test]
+    fn listener_position() {
+        let mut st = State::default();
+        for l in [
+            "TOPIC: vehicle_visual_odometry",
+            " vehicle_odometry",
+            "    timestamp: 290918036 (2.500000 seconds ago)",
+            "    timestamp_sample: 290917926 (110 us before timestamp)",
+            "    position: [1.50000, -2.00000, -0.75000]",
+            "    q: [1.00000, 0.00000, 0.00000, 0.00000]",
+        ] {
+            parse_listener_line(&mut st, l);
+        }
+        let p = st.vision_pos["vehicle_visual_odometry"];
+        assert_eq!((p.x, p.y, p.z), (1.5, -2.0, -0.75));
+        assert!((now() - p.updated - 2.5).abs() < 0.5);
     }
 
     #[test]

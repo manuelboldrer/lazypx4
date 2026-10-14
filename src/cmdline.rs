@@ -48,6 +48,12 @@ pub const COMMANDS: &[CommandSpec] = &[
     cmd("ack", &[], "ack", "acknowledge the alert banner (same as [A])"),
     cmd("replay", &[], "replay pause|resume|speed X", "control a --replay"),
     cmd("tlog", &[], "tlog", "show where this session's .tlog is being written"),
+    cmd(
+        "export",
+        &["csv"],
+        "export [FILE] [TOPIC ...|all]",
+        "positions to CSV: a .ulg (vision/mocap/EKF topics) or .tlog; no FILE = last download",
+    ),
     cmd("diff", &[], "diff FILE [FILE2]", "parameter differences: FILE vs the vehicle, or FILE vs FILE2"),
     cmd("help", &["h"], "help [command]", "list the commands in the event log"),
     cmd("quit", &["q"], "quit", "quit lazypx4"),

@@ -49,6 +49,19 @@ pub fn checks(st: &State, sys: &SystemStats, settings: &Settings) -> Vec<Check> 
         check("PX4", "Link", Pass, format!("sys {}  ·  {:.0} msg/s", st.target_system, st.rx_rate))
     });
 
+    // External vision / mocap, once a rate topic has been seen flowing.
+    if !st.uorb_lost.is_empty() {
+        let lost: Vec<&str> = st.uorb_lost.iter().map(String::as_str).collect();
+        out.push(check("PX4", "Vision / mocap", Fail, format!("LOST: {}", lost.join(", "))));
+    } else if !st.uorb_tracked.is_empty() {
+        let rates: Vec<String> = st
+            .uorb_tracked
+            .iter()
+            .filter_map(|topic| st.uorb_rates.get(topic).map(|r| format!("{topic} {} Hz", r.hz)))
+            .collect();
+        out.push(check("PX4", "Vision / mocap", Pass, rates.join("  ·  ")));
+    }
+
     let prearm_known = st.sensors_present != 0;
     out.push(if !st.last_preflight_fail.is_empty() {
         check("PX4", "Arming checks", Fail, st.last_preflight_fail.clone())

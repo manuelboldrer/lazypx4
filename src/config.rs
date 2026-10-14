@@ -51,6 +51,9 @@ pub struct Settings {
     pub keys: std::collections::BTreeMap<String, String>,
     /// Ring the terminal bell on an alert (tmux flags the window).
     pub alert_bell: bool,
+    /// uORB topics whose publish rate the dashboard polls with
+    /// `uorb top -1` over the MAVLink shell; empty = don't poll.
+    pub uorb_rate_topics: Vec<String>,
     /// The lazypx4.toml that was loaded, if any.
     pub config_path: Option<String>,
 }
@@ -66,6 +69,7 @@ pub struct FileConfig {
     pub safety: SafetyFile,
     pub alerts: AlertsFile,
     pub fleet: FleetFile,
+    pub uorb: UorbFile,
     /// heading -> parameter names, in file order.
     pub key_params: Option<toml::Table>,
     pub keys: std::collections::BTreeMap<String, String>,
@@ -114,6 +118,12 @@ pub struct SafetyFile {
 #[serde(default, deny_unknown_fields)]
 pub struct AlertsFile {
     pub bell: Option<bool>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UorbFile {
+    pub rate_topics: Option<Vec<String>>,
 }
 
 /// KEY PARAMETERS panel columns of (heading, parameter names).
@@ -287,6 +297,28 @@ pub const MODE_PAGE_SIZE: usize = 18;
 // ---------------------------------------------------------------------------
 
 pub const SHELL_MAX_LINES: usize = 1000;
+
+/// What `:export` / [c] pulls out of a .ulg by default: external vision,
+/// mocap, and the EKF's own estimate to compare them against.
+pub const EXPORT_ULOG_TOPICS: &[&str] =
+    &["vehicle_visual_odometry", "vehicle_mocap_odometry", "vehicle_odometry", "vehicle_local_position"];
+
+/// PX4's own component id: an ODOMETRY from anything else is external
+/// vision / mocap that PX4 forwarded.
+pub const MAV_COMP_ID_AUTOPILOT1: u8 = 1;
+/// A forwarded (live) vision position older than this is shown grey.
+pub const VISION_POS_STALE_S: f64 = 1.0;
+
+/// Default `[uorb] rate_topics`: what external vision / mocap (e.g.
+/// OptiTrack over a TELEM port) publishes into PX4.
+pub const DEFAULT_UORB_RATE_TOPICS: &[&str] = &["vehicle_visual_odometry", "vehicle_mocap_odometry"];
+/// How often the dashboard runs `uorb top -1` (which itself takes ~2 s).
+pub const UORB_RATE_POLL_INTERVAL: f64 = 3.0;
+/// Shell output is swallowed this long after a poll is sent.
+pub const UORB_RATE_PROBE_WINDOW: f64 = 2.8;
+/// Rate (Hz) thresholds for green / yellow; below is red.
+pub const UORB_RATE_GOOD: f64 = 30.0;
+pub const UORB_RATE_OK: f64 = 10.0;
 
 pub const LOG_LIST_TIMEOUT: f64 = 5.0;
 pub const LOG_LIST_QUIET_PERIOD: f64 = 0.60;

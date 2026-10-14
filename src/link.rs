@@ -192,7 +192,7 @@ impl Link {
 
 /// Every frame in one datagram / tlog record. Frames of messages the
 /// dialect doesn't know (or with out-of-range enum values) are skipped.
-fn decode(bytes: &[u8]) -> Vec<(MavHeader, MavMessage)> {
+pub(crate) fn decode(bytes: &[u8]) -> Vec<(MavHeader, MavMessage)> {
     let mut reader = PeekReader::new(bytes);
     let mut out = Vec::new();
     loop {

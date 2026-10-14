@@ -50,6 +50,13 @@ pub fn receiver_thread(
             }
 
             let mut st = state::lock(&shared);
+            // Checked before the vehicle filter: the mocap / vision sender
+            // (e.g. an ESP on a TELEM port) may use its own system id.
+            if let Some((source, x, y, z)) = external_position(header.component_id, &msg) {
+                st.rx_messages += 1;
+                st.vision_pos.insert(source.into(), state::VisionPos { x, y, z, updated: now() });
+                continue;
+            }
             if st.vehicle_locked && header.system_id != st.target_system {
                 continue;
             }
@@ -70,6 +77,19 @@ pub fn receiver_thread(
             last_rate_count = st.rx_messages;
             last_rate_time = t;
         }
+    }
+}
+
+/// External vision / mocap that PX4 forwarded from another MAVLink port
+/// (MAV_x_FORWARD on both instances): PX4 never sends these itself, except
+/// ODOMETRY, which is its own estimate when it comes from the autopilot.
+fn external_position(src_comp: u8, msg: &MavMessage) -> Option<(&'static str, f64, f64, f64)> {
+    let f = |v: f32| v as f64;
+    match msg {
+        MavMessage::ATT_POS_MOCAP(d) => Some(("ATT_POS_MOCAP", f(d.x), f(d.y), f(d.z))),
+        MavMessage::VISION_POSITION_ESTIMATE(d) => Some(("VISION_POSITION_ESTIMATE", f(d.x), f(d.y), f(d.z))),
+        MavMessage::ODOMETRY(d) if src_comp != MAV_COMP_ID_AUTOPILOT1 => Some(("ODOMETRY (external)", f(d.x), f(d.y), f(d.z))),
+        _ => None,
     }
 }
 

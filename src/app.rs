@@ -486,7 +486,16 @@ impl App {
         }
 
         service_vehicle(&self.link, &mut st, &self.settings);
+        // Not on the shell screen: the poll would land in what's typed there.
+        let probe_uorb = self.session.screen != Screen::Shell
+            && st.vehicle_locked
+            && self.settings.replay.is_none()
+            && !self.settings.uorb_rate_topics.is_empty()
+            && t - st.uorb_probe_sent_at >= UORB_RATE_POLL_INTERVAL;
         drop(st);
+        if probe_uorb && self.ensure_shell() {
+            shell::probe_uorb_rates(&self.link, &mut state::lock(&self.shared), &self.settings.uorb_rate_topics);
+        }
 
         // The [P] banner on the map expires like the dashboard's PREARM one.
         let mut ros = crate::host::lock(&self.ros);
@@ -1407,6 +1416,11 @@ impl App {
                 drop(st);
                 self.upload_or_analyze(key == "u", path);
             }
+            "c" => {
+                let path = (st.dl_status == "COMPLETE").then(|| st.dl_path.clone());
+                drop(st);
+                self.export_csv(path, Vec::new());
+            }
             "UP" if count > 0 => *i = (*i + count - 1) % count,
             "DOWN" if count > 0 => *i = (*i + 1) % count,
             "PGUP" => *i = i.saturating_sub(10),
@@ -1673,6 +1687,7 @@ pub(crate) fn service_vehicle(link: &Arc<Link>, st: &mut State, settings: &Setti
     crate::mav::guided::check_fence_upload(st);
     crate::mav::mission::check_mission_upload(st);
     update_health(st, settings.battery_low, settings.battery_critical);
+    check_uorb_rates(st, &settings.uorb_rate_topics);
     if t - st.trends.last_sample >= 1.0 && st.vehicle_locked {
         st.trends.last_sample = t;
         let fresh = |last: f64, v: f64| if last > 0.0 && t - last < TELEMETRY_TIMEOUT { v } else { f64::NAN };
@@ -1681,6 +1696,29 @@ pub(crate) fn service_vehicle(link: &Arc<Link>, st: &mut State, settings: &Setti
         let vibration = fresh(st.last_vibration, st.vibration_x.max(st.vibration_y).max(st.vibration_z));
         let rx = st.rx_rate;
         st.trends.sample(battery, altitude, vibration, rx);
+    }
+}
+
+/// A rate topic that was flowing (>= UORB_RATE_OK) and now isn't - the
+/// rigid body left the mocap volume / lost tracking, the ESP stopped, ... -
+/// raises an alert; it recovers once the rate is back. Stale readings (no
+/// poll answered lately) are not judged either way.
+fn check_uorb_rates(st: &mut State, topics: &[String]) {
+    let t = now();
+    for topic in topics {
+        let Some(r) = st.uorb_rates.get(topic).copied() else { continue };
+        if t - r.updated > 3.0 * UORB_RATE_POLL_INTERVAL {
+            continue;
+        }
+        let ok = r.hz as f64 >= UORB_RATE_OK;
+        if ok {
+            st.uorb_tracked.insert(topic.clone());
+            if st.uorb_lost.remove(topic) {
+                st.info(format!("{topic} back: {} Hz", r.hz));
+            }
+        } else if st.uorb_tracked.contains(topic) && st.uorb_lost.insert(topic.clone()) {
+            st.alert(format!("VISION/MOCAP LOST: {topic} {} Hz", r.hz));
+        }
     }
 }
 

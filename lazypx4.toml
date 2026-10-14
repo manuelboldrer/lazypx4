@@ -32,6 +32,11 @@
 [alerts]
 # bell = true                       # ring the terminal bell (tmux flags the window)
 
+[uorb]
+# Topics whose rate the dashboard shows, polled with `uorb top -1` over the
+# MAVLink shell every few seconds. [] turns the polling off.
+# rate_topics = ["vehicle_visual_odometry", "vehicle_mocap_odometry"]
+
 [fleet]
 # ports = [14560, 14561, 14562]     # what `lazypx4 --fleet` (no list) watches
 

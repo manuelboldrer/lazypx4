@@ -1,6 +1,7 @@
 //! Background subprocess jobs: firmware flashing (`px_uploader.py`), the
 //! .ulog web upload (`upload_log.py`) and the ecl_ekf health check
-//! (`process_logdata_ekf.py`). Mirrors `jobs.py` + `pxtools.py`.
+//! (`process_logdata_ekf.py`), plus the .ulg -> CSV export (pyulog's
+//! `ulog2csv`). Mirrors `jobs.py` + `pxtools.py`.
 //!
 //! These stay real PX4 tool scripts run under Python - they're manual,
 //! occasional actions, and reimplementing a bootloader protocol or the
@@ -20,6 +21,7 @@ pub enum JobKind {
     Firmware,
     UlogUpload,
     EclEkf,
+    UlogCsv,
 }
 
 #[derive(Debug, Default)]
@@ -336,4 +338,36 @@ pub fn start_ecl_ekf_check(jobs: &Jobs, shared: &Shared, tools_dir: &str, log: &
     });
     let name = log.file_name().unwrap_or_default().to_string_lossy();
     start(jobs, shared, JobKind::EclEkf, cmd, format!("EKF health-check on {name}"), Some(on_success))
+}
+
+// ---------------------------------------------------------------------------
+// .ulg -> CSV
+// ---------------------------------------------------------------------------
+
+/// `ulog2csv` the given topics (empty = every topic) into `<log>_csv/`.
+pub fn start_ulog_csv(jobs: &Jobs, shared: &Shared, tools_dir: &str, log: &Path, topics: &[String]) -> bool {
+    let dir = crate::export::out_dir(log);
+    let mut cmd = Command::new(tool_python(tools_dir));
+    // `python -m pyulog.ulog2csv` silently does nothing (no __main__).
+    cmd.args(["-c", "import sys; from pyulog.ulog2csv import main; sys.argv[0] = 'ulog2csv'; main()", "-o"]).arg(&dir);
+    if !topics.is_empty() {
+        cmd.arg("-m").arg(topics.join(","));
+    }
+    cmd.arg(log);
+    let stem = log.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+    let on_success: OnSuccess = Box::new(move |_, _| {
+        // ulog2csv names files <stem>_<topic>_<instance>.csv and silently
+        // skips topics that aren't in the log.
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .map(|rd| rd.filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default();
+        files.sort();
+        if files.is_empty() {
+            return Err("none of the topics are in this log (is SDLOG_PROFILE logging them?)".into());
+        }
+        let names: Vec<&str> = files.iter().map(|f| f.trim_start_matches(&format!("{stem}_")).trim_end_matches(".csv")).collect();
+        Ok(format!("{} -> {}", dir.display(), names.join(", ")))
+    });
+    let name = log.file_name().unwrap_or_default().to_string_lossy();
+    start(jobs, shared, JobKind::UlogCsv, cmd, format!("CSV export of {name}"), Some(on_success))
 }

@@ -17,7 +17,7 @@ Full list of keys, commands and options. Press `?` inside lazypx4 to see the key
 | `c` / `r` | Control setpoints / RC channels, wind, actuator outputs |
 | `p` | Parameters — browse, search, edit, decoded values, key-parameter panel, `s` save / `l` load / `D` diff a param file |
 | `s` | Sensor calibration |
-| `l` | Flight logs — download `.ulg`, upload to flight review, `ecl_ekf` check |
+| `l` | Flight logs — download `.ulg`, upload to flight review, `ecl_ekf` check, `c` CSV export |
 | `g` | Event log |
 | `t` | MAVLink shell (NuttShell) |
 | `f` | Flash firmware (`px_uploader.py`) |
@@ -35,6 +35,39 @@ Link loss, critical battery, an EKF fault, any PX4 failsafe and an in-air
 mode change that lazypx4 didn't command raise a flashing banner and ring
 the terminal bell, so tmux flags the window even when you're looking at
 another pane. `A` acknowledges.
+
+### uORB rates
+
+lazypx4 runs `uorb top -1` through the MAVLink
+shell every 3 s and shows the publish rate of `[uorb] rate_topics`
+(default `vehicle_visual_odometry` and `vehicle_mocap_odometry`, which
+carry external vision / motion capture data) in the NAVIGATION / ESTIMATION
+section. Green is 30 Hz or more, yellow is 10 Hz or more, and red is below
+that. A grey value is stale, and `--` means PX4 has not advertised that
+topic. Set `rate_topics = []` to stop polling. Polling continues on every
+screen except the NSH shell. A topic that has reached 10 Hz and then drops
+below it, for example because OptiTrack lost the rigid body, shows a bold
+red **LOST**, raises the flashing alert banner and bell, and fails
+*Vision / mocap* on the preflight screen until the rate is back. Expect
+2 to 5 s of delay (`uorb top -1` measures over 2 s, every 3 s).
+
+The dashboard's VISION line (POSITION / VELOCITY) shows the external vision
+/ mocap position, with its distance from the EKF position. By default it
+comes from `listener <topic>` in the same poll, so it updates every 3 s.
+For a live position, have PX4 forward the sender's MAVLink to lazypx4:
+set `MAV_x_FORWARD = 1` for the instance on the sender's port (the `x`
+whose `MAV_x_CONFIG` is that TELEM port), add `-f` to the `mavlink start`
+line for lazypx4 in `etc/extras.txt`, then reboot. `ATT_POS_MOCAP`,
+`VISION_POSITION_ESTIMATE` and any `ODOMETRY` not from the autopilot
+(component 1) are then shown at full rate, recorded in the `.tlog`, and
+exported by `:export` (the `compid` column tells the two ODOMETRY sources
+apart).
+
+PX4 only records vision / mocap in its `.ulg` when `SDLOG_PROFILE` asks
+for it: add 128 (computer vision: `vehicle_visual_odometry` and
+`vehicle_mocap_odometry` at up to about 33 Hz) and/or 2 (estimator replay:
+`vehicle_visual_odometry` at full rate), then reboot. `[c]` on the flight-log
+screen or `:export` turns them into CSV.
 
 ### Preflight (`y`)
 
@@ -54,6 +87,7 @@ Flight commands still ask for `type YES`.
 |---------|--|
 | `:arm` `:disarm` `:land` `:rtl` `:hold` `:kill` | Same as the hotkeys |
 | `:takeoff 5` · `:mode posctl` · `:offboard on` | Flight commands with arguments |
+| `:export [FILE] [TOPIC ... \| all]` | Positions to CSV in `<log>_csv/`: from a `.ulg`, external vision, mocap and the EKF estimate (`vehicle_visual_odometry`, `vehicle_mocap_odometry`, `vehicle_odometry`, `vehicle_local_position`), or other topics; from a `.tlog`, `LOCAL_POSITION_NED` / `ODOMETRY` / `ATT_POS_MOCAP` / `VISION_POSITION_ESTIMATE`. No FILE = the last download |
 | `:goto l 5 -3 -10` · `:wp seq` · `:cover 5 90` · `:fence upload` | Map commands without opening the map |
 | `:set MPC_XY_VEL_MAX 3` · `:get GF_ACTION` · `:param save` / `load FILE` | Parameters |
 | `:nsh top once` | Run a line in the PX4 NSH shell |
@@ -124,7 +158,7 @@ the `CHANGED` view.
 
 Defaults can live in [`lazypx4.toml`](../lazypx4.toml) (`--config FILE`, else
 `./lazypx4.toml`, else the one in the repo lazypx4 was built from):
-port, directories, ROS topics, battery thresholds, alert bell, fleet ports,
+port, directories, ROS topics, battery thresholds, alert bell, fleet ports, uORB rate topics,
 the key-parameter panel, key remaps (`"K" = ""` disables the kill key) and
 `:` aliases such as `agent = "!sudo systemctl restart micro-xrce-dds-agent"`.
 Command-line flags override the file.

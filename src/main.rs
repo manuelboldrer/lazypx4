@@ -8,6 +8,7 @@ mod app_cmd;
 mod app_map;
 mod cmdline;
 mod config;
+mod export;
 mod fleet;
 mod geo;
 mod host;
@@ -204,6 +205,10 @@ fn main() -> std::process::ExitCode {
         tlog_dir: record_tlog.then(|| pick(cli.tlog_dir, paths.tlog_dir, "./px4_tlogs")),
         replay: cli.replay.map(|path| (path, cli.replay_speed)),
         alert_bell: file.alerts.bell.unwrap_or(true),
+        uorb_rate_topics: file
+            .uorb
+            .rate_topics
+            .unwrap_or_else(|| config::DEFAULT_UORB_RATE_TOPICS.iter().map(|t| t.to_string()).collect()),
         key_params,
         keys: file.keys,
         aliases: file.aliases,

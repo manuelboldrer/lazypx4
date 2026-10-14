@@ -351,6 +351,28 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         lines.push(Ln::new().raw("   GPS (global): ").dim("no GLOBAL_POSITION_INT yet").line());
     }
 
+    // External vision / mocap: the freshest source wins.
+    let vision = st.vision_pos.iter().max_by(|a, b| a.1.updated.total_cmp(&b.1.updated));
+    if let Some((source, p)) = vision {
+        // A polled topic is only as fresh as the 3 s `listener` poll.
+        let polled = ctx.app.settings.uorb_rate_topics.contains(source);
+        let fresh = now() - p.updated < if polled { 2.0 * UORB_RATE_POLL_INTERVAL } else { VISION_POS_STALE_S };
+        let text = format!("   VISION:       N {:9.3}   E {:9.3}   D {:9.3} m", p.x, p.y, p.z);
+        let mut l = if fresh { Ln::new().raw(text) } else { Ln::new().dim(text) };
+        if st.uorb_lost.contains(source) {
+            l = l.st("  LOST", alert);
+        }
+        l = l.dim(format!("  {source}, {}", age_text(p.updated)));
+        if st.local_pos_valid {
+            let d = ((p.x - lx).powi(2) + (p.y - ly).powi(2) + (p.z - lz).powi(2)).sqrt();
+            let c = if d < 0.1 { GREEN } else if d < 0.5 { YELLOW } else { RED };
+            l = l.raw("   EKF diff ").fg(format!("{d:.2} m"), c);
+        }
+        lines.push(l.line());
+    } else if !ctx.app.settings.uorb_rate_topics.is_empty() {
+        lines.push(Ln::new().raw("   VISION:       ").dim("no external vision / mocap position yet").line());
+    }
+
     match gps_local {
         Some((gn, ge)) if st.local_pos_valid => {
             let (dn, de) = (gn - lx, ge - ly);
@@ -572,6 +594,23 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
             .spans(fence.0)
             .line(),
     );
+
+    if !ctx.app.settings.uorb_rate_topics.is_empty() {
+        let mut l = Ln::new().raw("   uORB: ");
+        for topic in &ctx.app.settings.uorb_rate_topics {
+            l = l.raw(format!("{topic} "));
+            l = match st.uorb_rates.get(topic) {
+                Some(r) if st.uorb_lost.contains(topic) => l.st(format!("LOST {} Hz", r.hz), alert),
+                Some(r) if now() - r.updated < 3.0 * UORB_RATE_POLL_INTERVAL => {
+                    l.fg(format!("{} Hz", r.hz), graded(r.hz as f64, UORB_RATE_GOOD, UORB_RATE_OK, true))
+                }
+                Some(r) => l.dim(format!("{} Hz ({})", r.hz, age_text(r.updated))),
+                None => l.dim("--"),
+            };
+            l = l.raw("   ");
+        }
+        lines.push(l.line());
+    }
 
     let rc_conn = if !st.rc_received {
         Ln::new().dim("NOT CONNECTED")

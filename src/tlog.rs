@@ -128,7 +128,7 @@ impl Player {
         self.base = self.first_ts.map(|_| (self.last_ts, Instant::now()));
     }
 
-    fn read_record(&mut self) -> io::Result<Option<(u64, Vec<u8>)>> {
+    pub(crate) fn read_record(&mut self) -> io::Result<Option<(u64, Vec<u8>)>> {
         let eof_is_end = |r: io::Result<()>| match r {
             Ok(()) => Ok(true),
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
