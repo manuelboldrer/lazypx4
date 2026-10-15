@@ -487,14 +487,23 @@ impl App {
 
         service_vehicle(&self.link, &mut st, &self.settings);
         // Not on the shell screen: the poll would land in what's typed there.
+        // Not while the heartbeat is stale either: on a slow radio the shell
+        // replies compete with telemetry, so give the link room to recover.
         let probe_uorb = self.session.screen != Screen::Shell
             && st.vehicle_locked
+            && !st.heartbeat_timeout_active
             && self.settings.replay.is_none()
             && !self.settings.uorb_rate_topics.is_empty()
-            && t - st.uorb_probe_sent_at >= UORB_RATE_POLL_INTERVAL;
+            && t - st.uorb_probe_sent_at >= self.settings.uorb_poll_interval;
+        // A forwarded MAVLink vision / mocap position already gives the live
+        // position; `listener` (the bulk of the reply) is then not needed.
+        let forwarded = st
+            .vision_pos
+            .iter()
+            .any(|(src, p)| !self.settings.uorb_rate_topics.contains(src) && t - p.updated < VISION_POS_STALE_S);
         drop(st);
         if probe_uorb && self.ensure_shell() {
-            shell::probe_uorb_rates(&self.link, &mut state::lock(&self.shared), &self.settings.uorb_rate_topics);
+            shell::probe_uorb_rates(&self.link, &mut state::lock(&self.shared), &self.settings.uorb_rate_topics, !forwarded);
         }
 
         // The [P] banner on the map expires like the dashboard's PREARM one.
@@ -1687,7 +1696,7 @@ pub(crate) fn service_vehicle(link: &Arc<Link>, st: &mut State, settings: &Setti
     crate::mav::guided::check_fence_upload(st);
     crate::mav::mission::check_mission_upload(st);
     update_health(st, settings.battery_low, settings.battery_critical);
-    check_uorb_rates(st, &settings.uorb_rate_topics);
+    check_uorb_rates(st, &settings.uorb_rate_topics, settings.uorb_poll_interval);
     if t - st.trends.last_sample >= 1.0 && st.vehicle_locked {
         st.trends.last_sample = t;
         let fresh = |last: f64, v: f64| if last > 0.0 && t - last < TELEMETRY_TIMEOUT { v } else { f64::NAN };
@@ -1703,11 +1712,11 @@ pub(crate) fn service_vehicle(link: &Arc<Link>, st: &mut State, settings: &Setti
 /// rigid body left the mocap volume / lost tracking, the ESP stopped, ... -
 /// raises an alert; it recovers once the rate is back. Stale readings (no
 /// poll answered lately) are not judged either way.
-fn check_uorb_rates(st: &mut State, topics: &[String]) {
+fn check_uorb_rates(st: &mut State, topics: &[String], interval: f64) {
     let t = now();
     for topic in topics {
         let Some(r) = st.uorb_rates.get(topic).copied() else { continue };
-        if t - r.updated > 3.0 * UORB_RATE_POLL_INTERVAL {
+        if t - r.updated > 3.0 * interval {
             continue;
         }
         let ok = r.hz as f64 >= UORB_RATE_OK;

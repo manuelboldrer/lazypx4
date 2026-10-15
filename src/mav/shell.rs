@@ -89,13 +89,17 @@ impl EchoFilter {
 }
 
 /// Ask for the publish rate of `topics` (substring filters, as `uorb top`
-/// takes them). The reply is parsed by [`parse_uorb_top_row`] and kept off
-/// the shell screen.
-pub fn probe_uorb_rates(link: &Link, st: &mut State, topics: &[String]) -> bool {
+/// takes them) and, with `listen`, the position of one of them - round-robin,
+/// since a `listener` reply is ~1 kB and on a slow radio link PX4 drops
+/// telemetry (heartbeats included) to fit the shell text in. The reply is
+/// parsed by [`parse_uorb_top_row`] and kept off the shell screen.
+pub fn probe_uorb_rates(link: &Link, st: &mut State, topics: &[String], listen: bool) -> bool {
     st.uorb_probe_sent_at = now();
     // `-1` plus more than one filter also lists matching topics at 0 Hz.
     let mut cmds = format!("uorb top -1 {}\n", topics.join(" "));
-    for topic in topics {
+    if listen && !topics.is_empty() {
+        let topic = &topics[st.uorb_listen_next % topics.len()];
+        st.uorb_listen_next = st.uorb_listen_next.wrapping_add(1);
         cmds += &format!("listener {topic}\n");
     }
     send_shell_raw(link, cmds.as_bytes())

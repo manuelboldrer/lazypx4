@@ -354,9 +354,12 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     // External vision / mocap: the freshest source wins.
     let vision = st.vision_pos.iter().max_by(|a, b| a.1.updated.total_cmp(&b.1.updated));
     if let Some((source, p)) = vision {
-        // A polled topic is only as fresh as the 3 s `listener` poll.
-        let polled = ctx.app.settings.uorb_rate_topics.contains(source);
-        let fresh = now() - p.updated < if polled { 2.0 * UORB_RATE_POLL_INTERVAL } else { VISION_POS_STALE_S };
+        // A polled topic is only as fresh as the round-robin `listener` poll
+        // (one topic per poll).
+        let settings = &ctx.app.settings;
+        let polled = settings.uorb_rate_topics.contains(source);
+        let poll_cycle = settings.uorb_poll_interval * settings.uorb_rate_topics.len() as f64;
+        let fresh = now() - p.updated < if polled { 2.0 * poll_cycle } else { VISION_POS_STALE_S };
         let text = format!("   VISION:       N {:9.3}   E {:9.3}   D {:9.3} m", p.x, p.y, p.z);
         let mut l = if fresh { Ln::new().raw(text) } else { Ln::new().dim(text) };
         if st.uorb_lost.contains(source) {
@@ -601,7 +604,7 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
             l = l.raw(format!("{topic} "));
             l = match st.uorb_rates.get(topic) {
                 Some(r) if st.uorb_lost.contains(topic) => l.st(format!("LOST {} Hz", r.hz), alert),
-                Some(r) if now() - r.updated < 3.0 * UORB_RATE_POLL_INTERVAL => {
+                Some(r) if now() - r.updated < 3.0 * ctx.app.settings.uorb_poll_interval => {
                     l.fg(format!("{} Hz", r.hz), graded(r.hz as f64, UORB_RATE_GOOD, UORB_RATE_OK, true))
                 }
                 Some(r) => l.dim(format!("{} Hz ({})", r.hz, age_text(r.updated))),

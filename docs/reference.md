@@ -39,21 +39,25 @@ another pane. `A` acknowledges.
 ### uORB rates
 
 lazypx4 runs `uorb top -1` through the MAVLink
-shell every 3 s and shows the publish rate of `[uorb] rate_topics`
+shell every `[uorb] poll_interval` seconds (default and minimum 3) and shows the publish rate of `[uorb] rate_topics`
 (default `vehicle_visual_odometry` and `vehicle_mocap_odometry`, which
 carry external vision / motion capture data) in the NAVIGATION / ESTIMATION
 section. Green is 30 Hz or more, yellow is 10 Hz or more, and red is below
 that. A grey value is stale, and `--` means PX4 has not advertised that
 topic. Set `rate_topics = []` to stop polling. Polling continues on every
-screen except the NSH shell. A topic that has reached 10 Hz and then drops
+screen except the NSH shell, and pauses while the heartbeat is lost: on a
+slow radio PX4 drops telemetry, heartbeats included, to make room for the
+shell replies, so raise `poll_interval` if the heartbeat drops out. A topic that has reached 10 Hz and then drops
 below it, for example because OptiTrack lost the rigid body, shows a bold
 red **LOST**, raises the flashing alert banner and bell, and fails
 *Vision / mocap* on the preflight screen until the rate is back. Expect
-2 to 5 s of delay (`uorb top -1` measures over 2 s, every 3 s).
+2 to 5 s of delay at the default interval (`uorb top -1` measures over 2 s).
 
 The dashboard's VISION line (POSITION / VELOCITY) shows the external vision
 / mocap position, with its distance from the EKF position. By default it
-comes from `listener <topic>` in the same poll, so it updates every 3 s.
+comes from `listener <topic>` in the same poll, one topic per poll in
+turn, so with two topics each updates every 6 s. While a forwarded MAVLink
+position (below) is arriving, `listener` is skipped.
 For a live position, have PX4 forward the sender's MAVLink to lazypx4:
 set `MAV_x_FORWARD = 1` for the instance on the sender's port (the `x`
 whose `MAV_x_CONFIG` is that TELEM port), add `-f` to the `mavlink start`

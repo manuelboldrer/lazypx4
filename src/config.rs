@@ -54,6 +54,8 @@ pub struct Settings {
     /// uORB topics whose publish rate the dashboard polls with
     /// `uorb top -1` over the MAVLink shell; empty = don't poll.
     pub uorb_rate_topics: Vec<String>,
+    /// Seconds between those polls (>= UORB_RATE_MIN_POLL_INTERVAL).
+    pub uorb_poll_interval: f64,
     /// The lazypx4.toml that was loaded, if any.
     pub config_path: Option<String>,
 }
@@ -124,6 +126,7 @@ pub struct AlertsFile {
 #[serde(default, deny_unknown_fields)]
 pub struct UorbFile {
     pub rate_topics: Option<Vec<String>>,
+    pub poll_interval: Option<f64>,
 }
 
 /// KEY PARAMETERS panel columns of (heading, parameter names).
@@ -312,8 +315,10 @@ pub const VISION_POS_STALE_S: f64 = 1.0;
 /// Default `[uorb] rate_topics`: what external vision / mocap (e.g.
 /// OptiTrack over a TELEM port) publishes into PX4.
 pub const DEFAULT_UORB_RATE_TOPICS: &[&str] = &["vehicle_visual_odometry", "vehicle_mocap_odometry"];
-/// How often the dashboard runs `uorb top -1` (which itself takes ~2 s).
-pub const UORB_RATE_POLL_INTERVAL: f64 = 3.0;
+/// Default `[uorb] poll_interval`: how often the dashboard runs
+/// `uorb top -1` (which itself takes ~2 s, hence the minimum).
+pub const DEFAULT_UORB_POLL_INTERVAL: f64 = 3.0;
+pub const UORB_RATE_MIN_POLL_INTERVAL: f64 = 3.0;
 /// Shell output is swallowed this long after a poll is sent.
 pub const UORB_RATE_PROBE_WINDOW: f64 = 2.8;
 /// Rate (Hz) thresholds for green / yellow; below is red.

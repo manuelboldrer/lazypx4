@@ -484,6 +484,8 @@ pub struct State {
     pub uorb_listen_topic: String,
     /// Its "timestamp: ... (A seconds ago)", until the position line.
     pub uorb_listen_age: Option<f64>,
+    /// Which rate topic the next poll's `listener` asks for.
+    pub uorb_listen_next: usize,
 
     // Flight logs.
     pub flight_logs: BTreeMap<u16, FlightLogEntry>,

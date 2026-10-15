@@ -36,6 +36,7 @@
 # Topics whose rate the dashboard shows, polled with `uorb top -1` over the
 # MAVLink shell every few seconds. [] turns the polling off.
 # rate_topics = ["vehicle_visual_odometry", "vehicle_mocap_odometry"]
+# poll_interval = 3.0               # seconds, min 3; raise it on a slow radio
 
 [fleet]
 # ports = [14560, 14561, 14562]     # what `lazypx4 --fleet` (no list) watches

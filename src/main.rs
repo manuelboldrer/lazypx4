@@ -209,6 +209,11 @@ fn main() -> std::process::ExitCode {
             .uorb
             .rate_topics
             .unwrap_or_else(|| config::DEFAULT_UORB_RATE_TOPICS.iter().map(|t| t.to_string()).collect()),
+        uorb_poll_interval: file
+            .uorb
+            .poll_interval
+            .unwrap_or(config::DEFAULT_UORB_POLL_INTERVAL)
+            .max(config::UORB_RATE_MIN_POLL_INTERVAL),
         key_params,
         keys: file.keys,
         aliases: file.aliases,
