@@ -213,6 +213,8 @@ fn main() -> std::process::ExitCode {
         tlog_dir: record_tlog.then(|| pick(cli.tlog_dir, paths.tlog_dir, "./px4_tlogs")),
         replay: cli.replay.map(|path| (path, cli.replay_speed)),
         alert_bell: file.alerts.bell.unwrap_or(true),
+        alert_sound: file.alerts.sound.unwrap_or_else(|| host::BEEP_SOUND.to_string()),
+        alert_repeat: file.alerts.repeat.unwrap_or(config::DEFAULT_ALERT_REPEAT),
         key_params,
         keys: file.keys,
         aliases: file.aliases,

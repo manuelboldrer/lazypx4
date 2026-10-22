@@ -35,7 +35,8 @@ force-arms.
 Link loss, critical battery, an EKF fault, any PX4 failsafe and an in-air
 mode change that lazypx4 didn't command raise a flashing banner and ring
 the terminal bell, so tmux flags the window even when you're looking at
-another pane. `A` acknowledges.
+another pane, and beep five times (`[alerts] sound` takes a sound file instead,
+`""` for the bell only; `repeat` sets the count). `A` acknowledges.
 
 ### Preflight (`y`)
 

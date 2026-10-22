@@ -505,3 +505,109 @@ pub fn run_speedtest_async(stats: &Arc<Mutex<NetStats>>) -> bool {
     });
     true
 }
+
+// ---------------------------------------------------------------------------
+// Alert sound
+// ---------------------------------------------------------------------------
+
+/// `[alerts] sound` value for the built-in beep pattern.
+pub const BEEP_SOUND: &str = "beep";
+const BEEP_RATE: u32 = 22_050;
+const BEEP_HZ: f64 = 2_000.0;
+const BEEP_ON_S: f64 = 0.12;
+const BEEP_OFF_S: f64 = 0.08;
+/// Silence between repetitions of a sound file.
+const SOUND_GAP: Duration = Duration::from_millis(150);
+
+/// Ring the terminal bell and play the alert sound `repeat` times in the
+/// background. BEL alone is silent under many setups (sway, VTE with the
+/// audible bell off). `sound` is "beep" (a generated square-wave beep), a
+/// sound file, or "" for the bell only; the first player found plays it:
+/// paplay, pw-play, then aplay.
+pub fn ring_alert(sound: &str, repeat: u32) {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x07");
+    let _ = out.flush();
+
+    if sound.is_empty() || repeat == 0 {
+        return;
+    }
+    let sound = sound.to_string();
+    // Its own thread so a slow player never stalls the UI, and so the child
+    // is reaped instead of left as a zombie.
+    let _ = std::thread::Builder::new().name("AlertSound".into()).spawn(move || {
+        // The beep pattern is one file holding every repetition, so the
+        // spacing stays tight; a sound file is played `repeat` times.
+        let (path, plays) = if sound == BEEP_SOUND {
+            match beep_file(repeat) {
+                Some(p) => (p, 1),
+                None => return,
+            }
+        } else {
+            (std::path::PathBuf::from(&sound), repeat)
+        };
+        if !path.is_file() {
+            return;
+        }
+        for i in 0..plays {
+            if i > 0 {
+                std::thread::sleep(SOUND_GAP);
+            }
+            if !play(&path) {
+                return;
+            }
+        }
+    });
+}
+
+fn play(path: &std::path::Path) -> bool {
+    ["paplay", "pw-play", "aplay"].iter().any(|player| {
+        Command::new(player)
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+}
+
+/// Write (once per beep count) a WAV of `beeps` short square-wave beeps.
+fn beep_file(beeps: u32) -> Option<std::path::PathBuf> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let path = dir.join(format!("lazypx4-beep-{beeps}.wav"));
+    if path.is_file() {
+        return Some(path);
+    }
+    let on = (BEEP_RATE as f64 * BEEP_ON_S) as usize;
+    let off = (BEEP_RATE as f64 * BEEP_OFF_S) as usize;
+    let half_period = BEEP_RATE as f64 / BEEP_HZ / 2.0;
+    let mut samples: Vec<i16> = Vec::with_capacity((on + off) * beeps as usize);
+    for _ in 0..beeps {
+        samples.extend((0..on).map(|n| if ((n as f64 / half_period) as usize) % 2 == 0 { 9_000 } else { -9_000 }));
+        samples.extend(std::iter::repeat_n(0, off));
+    }
+    let data_len = (samples.len() * 2) as u32;
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&BEEP_RATE.to_le_bytes());
+    wav.extend_from_slice(&(BEEP_RATE * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        wav.extend_from_slice(&s.to_le_bytes());
+    }
+    // Write-then-rename so a concurrent alert never plays a half file.
+    let tmp = path.with_extension("wav.tmp");
+    std::fs::write(&tmp, wav).ok()?;
+    std::fs::rename(&tmp, &path).ok()?;
+    Some(path)
+}

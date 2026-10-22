@@ -52,6 +52,10 @@ pub struct Settings {
     pub keys: std::collections::BTreeMap<String, String>,
     /// Ring the terminal bell on an alert (tmux flags the window).
     pub alert_bell: bool,
+    /// Played on an alert: "beep", a sound file, or "" (terminal bell only).
+    pub alert_sound: String,
+    /// How many times the alert sound repeats.
+    pub alert_repeat: u32,
     /// The lazypx4.toml that was loaded, if any.
     pub config_path: Option<String>,
 }
@@ -123,7 +127,11 @@ pub struct UploadFile {
 #[serde(default, deny_unknown_fields)]
 pub struct AlertsFile {
     pub bell: Option<bool>,
+    pub sound: Option<String>,
+    pub repeat: Option<u32>,
 }
+
+pub const DEFAULT_ALERT_REPEAT: u32 = 5;
 
 /// KEY PARAMETERS panel columns of (heading, parameter names).
 pub type KeyParamColumns = Vec<Vec<(String, Vec<String>)>>;

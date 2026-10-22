@@ -33,7 +33,9 @@
 # battery_critical = 15.0           # % - red + failsafe event
 
 [alerts]
-# bell = true                       # ring the terminal bell (tmux flags the window)
+# bell = true                       # ring the terminal bell (tmux flags the window) + play the sound
+# sound = "beep"                    # built-in beep, a sound file path, or "" = terminal bell only
+# repeat = 5                        # beeps (or plays of the file) per alert
 
 [fleet]
 # ports = [14560, 14561, 14562]     # what `lazypx4 --fleet` (no list) watches

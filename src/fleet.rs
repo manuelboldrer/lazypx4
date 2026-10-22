@@ -873,9 +873,7 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
             .filter_map(|s| s.unit.as_ref())
             .fold(false, |any, u| std::mem::take(&mut state::lock(&u.shared).alert_bell) | any);
         if bell && settings.alert_bell {
-            use std::io::Write;
-            let _ = std::io::stdout().write_all(b"\x07");
-            let _ = std::io::stdout().flush();
+            crate::host::ring_alert(&settings.alert_sound, settings.alert_repeat);
         }
         fleet.request_preflight_params();
         terminal.draw(|f| draw(f, &mut fleet))?;

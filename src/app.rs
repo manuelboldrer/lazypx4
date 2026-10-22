@@ -494,13 +494,8 @@ impl App {
 
         let mut st = state::lock(&self.shared);
 
-        // BEL goes straight to the terminal; tmux / the terminal emulator
-        // turn it into a window flag or an audible / visual bell.
         if std::mem::take(&mut st.alert_bell) && self.settings.alert_bell {
-            use std::io::Write;
-            let mut out = std::io::stdout();
-            let _ = out.write_all(b"\x07");
-            let _ = out.flush();
+            crate::host::ring_alert(&self.settings.alert_sound, self.settings.alert_repeat);
         }
 
         service_vehicle(&self.link, &mut st, &self.settings);
