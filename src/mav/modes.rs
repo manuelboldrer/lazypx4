@@ -168,9 +168,13 @@ pub fn confirm_mode_option(link: &Link, shared: &Shared, option: &ModeOption) {
             if !vehicle_ready(&mut st, link) {
                 return;
             }
+            // PX4 packs custom_mode as main mode in bits 16-23, sub mode in
+            // bits 24-31; DO_SET_MODE takes them split as param2/param3.
+            let main = ((*value >> 16) & 0xFF) as f32;
+            let sub = ((*value >> 24) & 0xFF) as f32;
             if link.command_long(
                 MavCmd::MAV_CMD_DO_SET_MODE,
-                [MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, *value as f32, 0., 0., 0., 0., 0.],
+                [MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub, 0., 0., 0., 0.],
             ) {
                 st.command(format!("DO_SET_MODE command SENT: {}", option.label));
             } else {
