@@ -209,6 +209,12 @@ pub struct Session {
 
     pub confirm: Option<Confirm>,
     pub input: Option<Input>,
+    /// The ranger-style browser for "load a file" prompts.
+    pub picker: Option<crate::picker::FilePicker>,
+    /// Listing rows visible last frame - set by the renderer.
+    pub picker_page: usize,
+    /// Last directory picked from, per kind of file (kml / params).
+    pub picker_dirs: std::collections::HashMap<&'static str, std::path::PathBuf>,
     pub search_active: bool,
     pub search_query: String,
 
@@ -254,6 +260,9 @@ impl Session {
             firmware_port_index: 0,
             confirm: None,
             input: None,
+            picker: None,
+            picker_page: 20,
+            picker_dirs: Default::default(),
             search_active: false,
             search_query: String::new(),
             cmd_active: false,
@@ -526,6 +535,51 @@ impl App {
 
     pub(crate) fn request_input(&mut self, prompt: impl Into<String>, kind: InputKind) {
         self.session.input = Some(Input { prompt: prompt.into(), buffer: String::new(), kind });
+    }
+
+    /// Browse for the file `kind` loads; TAB in the browser falls back to
+    /// typing `prompt`.
+    pub(crate) fn request_file(&mut self, prompt: impl Into<String>, kind: InputKind) {
+        let (group, exts): (&'static str, &'static [&'static str]) = match kind {
+            InputKind::Kml => ("kml", &["kml", "plan"]),
+            _ => ("params", &["params", "param", "txt", "yaml", "yml"]),
+        };
+        let start = match self.session.picker_dirs.get(group) {
+            Some(dir) => dir.clone(),
+            None if group == "kml" => {
+                let loaded = state::lock(&self.shared).kml_path.clone();
+                let loaded = if loaded.is_empty() { self.settings.kml_path.clone().unwrap_or_default() } else { loaded };
+                std::path::Path::new(&loaded).parent().map(|p| p.to_path_buf()).unwrap_or_default()
+            }
+            None => self.resolve_param_path(&self.settings.param_dir.clone()),
+        };
+        let start = if start.as_os_str().is_empty() { std::path::PathBuf::from(".") } else { start };
+        let prompt = prompt.into();
+        self.session.picker = Some(crate::picker::FilePicker::new(prompt, kind, exts, &start, None));
+    }
+
+    fn process_picker(&mut self, key: &str) {
+        let Some(picker) = self.session.picker.as_mut() else { return };
+        match picker.key(key, self.session.picker_page) {
+            crate::picker::Outcome::Stay => {}
+            crate::picker::Outcome::Cancel => self.session.picker = None,
+            crate::picker::Outcome::Type(text) => {
+                let picker = self.session.picker.take().unwrap();
+                self.session.input = Some(Input { prompt: picker.title, buffer: text, kind: picker.kind });
+            }
+            crate::picker::Outcome::Pick(path) => {
+                let picker = self.session.picker.take().unwrap();
+                let group = if matches!(picker.kind, InputKind::Kml) { "kml" } else { "params" };
+                self.session.picker_dirs.insert(group, picker.dir.clone());
+                let text = path.display().to_string();
+                match picker.kind {
+                    InputKind::Kml => self.load_kml(&text),
+                    InputKind::ParamLoad => self.param_load_submit(&text),
+                    InputKind::ParamDiff => self.cmd_param_diff(&text, None),
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn process_confirmation(&mut self, key: &str) {
@@ -1006,6 +1060,7 @@ impl App {
         let typing = self.session.cmd_active
             || self.session.confirm.is_some()
             || self.session.input.is_some()
+            || self.session.picker.is_some()
             || self.session.search_active
             || self.session.help_open
             || (self.session.screen == Screen::Shell && !self.session.sidebar_focused)
@@ -1031,6 +1086,14 @@ impl App {
                 "PGDN" => self.session.help_scroll += 10,
                 "PGUP" => self.session.help_scroll = self.session.help_scroll.saturating_sub(10),
                 _ => self.session.help_open = false,
+            }
+            return;
+        }
+        if self.session.picker.is_some() {
+            if key == "CTRL_C" {
+                self.quit();
+            } else {
+                self.process_picker(&key);
             }
             return;
         }
@@ -1508,8 +1571,8 @@ impl App {
                 self.session.param_index = 0;
             }
             "b" => self.request_confirmation("REBOOT PX4? Vehicle will restart. Type YES", Action::Reboot),
-            "D" => self.request_input(
-                format!("Diff parameter file against the vehicle (or two files: A B; relative to {}):", self.settings.param_dir),
+            "D" => self.request_file(
+                format!("Diff parameter file against the vehicle (typed: or two files A B; relative to {}):", self.settings.param_dir),
                 InputKind::ParamDiff,
             ),
             "s" => {
@@ -1534,7 +1597,7 @@ impl App {
                     return;
                 }
                 drop(st);
-                self.request_input(
+                self.request_file(
                     format!("Load parameters from (.params / NAME VALUE / NAME: VALUE yaml; relative to {}):", self.settings.param_dir),
                     InputKind::ParamLoad,
                 );

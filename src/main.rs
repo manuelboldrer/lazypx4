@@ -18,6 +18,7 @@ mod lineedit;
 mod link;
 mod mav;
 mod parammeta;
+mod picker;
 mod preflight;
 mod px4mode;
 mod ros;

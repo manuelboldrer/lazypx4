@@ -51,7 +51,7 @@ fn screen_keys(screen: Screen) -> (Keys, bool) {
             ("  k j / a d", "jog: forward, back / left, right"),
             ("  w s / h l", "jog: up, down / yaw"),
             ("  [ / ]", "jog: halve / double the step"),
-            ("o / O", "load .kml or QGC .plan / upload its fence"),
+            ("o / O", "browse for a .kml / QGC .plan / upload its fence"),
             ("M", "upload the .plan mission to PX4"),
             ("W / C", "fly KML waypoints / lawnmower coverage"),
             ("V / v / B", "LiDAR overlay / topic / robot vs world frame"),

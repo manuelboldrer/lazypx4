@@ -172,3 +172,20 @@ Command-line flags override the file.
 
 `Tools/` is a vendored copy of PX4's `px_uploader.py`, `upload_log.py` and
 `ecl_ekf` (BSD-3-Clause); only `f` and the log upload/check need it.
+
+## File browser
+
+`o` (map), `l` and `D` (parameters) open a ranger-style browser instead of a
+path prompt. It starts in the last directory you picked from (the parameter
+dir / the loaded `.kml`'s dir the first time) and lists only matching files
+(`.kml` `.plan`, or `.params` `.param` `.txt` `.yaml` `.yml`).
+
+| Key | |
+|---|---|
+| `j` `k` / `↑` `↓` · `g` `G` · `Ctrl-D` `Ctrl-U` | Move · top / bottom · page |
+| `l` / `→` / `ENTER` | Enter the directory / pick the file |
+| `h` / `←` / `BACKSPACE` | Parent directory |
+| `/` | Filter as you type (`ENTER` on a single match picks it) |
+| `.` · `a` · `~` | Hidden files · all files · home |
+| `TAB` | Type a path instead (pre-filled with the current dir; `D` with two files `A B`) |
+| `ESC` / `q` | Cancel |

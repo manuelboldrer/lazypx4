@@ -13,6 +13,7 @@ mod lists;
 pub mod map;
 mod other;
 mod payload;
+mod picker;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -294,6 +295,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     drop(st);
     if app.session.help_open {
         help::draw(frame, body, screen, &mut app.session.help_scroll);
+    } else if let Some(p) = &app.session.picker {
+        app.session.picker_page = picker::draw(frame, body, p);
     } else if let Some(img) = map_image {
         let scroll = if screen.scrolls_as_page() { app.session.main_scroll } else { 0 };
         crate::kitty::want(img.placement(inner.x, inner.y, scroll, inner.height as usize));

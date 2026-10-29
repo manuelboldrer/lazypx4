@@ -137,7 +137,7 @@ impl App {
             }
             "o" => {
                 drop(st);
-                self.request_input("KML or QGC .plan file path (waypoints + fence overlay; a .plan's mission uploads with [M]):", InputKind::Kml);
+                self.request_file("KML or QGC .plan file path (waypoints + fence overlay; a .plan's mission uploads with [M]):", InputKind::Kml);
             }
             "O" => {
                 drop(st);
