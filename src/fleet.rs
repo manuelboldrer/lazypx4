@@ -867,13 +867,14 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
     }
 
     loop {
-        let bell = fleet
-            .slots
-            .iter()
-            .filter_map(|s| s.unit.as_ref())
-            .fold(false, |any, u| std::mem::take(&mut state::lock(&u.shared).alert_bell) | any);
+        let mut bell = false;
+        for unit in fleet.slots.iter().filter_map(|s| s.unit.as_ref()) {
+            let mut st = state::lock(&unit.shared);
+            bell |= std::mem::take(&mut st.alert_bell);
+            st.alert_voice.clear();
+        }
         if bell && settings.alert_bell {
-            crate::host::ring_alert(&settings.alert_sound, settings.alert_repeat);
+            crate::host::ring_alert(&settings.alert_sound, settings.alert_repeat, Vec::new());
         }
         fleet.request_preflight_params();
         terminal.draw(|f| draw(f, &mut fleet))?;

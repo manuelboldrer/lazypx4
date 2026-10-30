@@ -6,6 +6,7 @@ use ratatui::text::Line;
 
 use super::*;
 use crate::state::now;
+use crate::voice::AlertAudio;
 
 const STICK_WIDTH: usize = 19;
 const STICK_HEIGHT: usize = 9;
@@ -348,13 +349,24 @@ const LOGO: [&str; 4] = [
     "▀▀▘▘ ▘▀▀▘ ▘ ▘  ▘ ▘  ▘",
 ];
 
-pub fn about() -> Vec<Line<'static>> {
+pub fn about(ctx: &Ctx) -> Vec<Line<'static>> {
     let logo = Style::new().fg(CYAN).add_modifier(Modifier::BOLD);
     let link = Style::new().fg(MAUVE);
     let mut lines = vec![blank()];
     lines.extend(LOGO.iter().map(|row| Ln::new().raw("  ").st(*row, logo).line()));
     lines.push(blank());
     lines.push(Ln::new().raw("  ").dim("a lazygit-style terminal UI for PX4 over MAVLink - Rust / ratatui port").line());
+    lines.push(blank());
+    lines.push(section("ALERT SOUND", "←→ to change"));
+    let mut picker = Ln::new().raw("   ");
+    for audio in AlertAudio::ALL {
+        picker = if audio == ctx.app.session.alert_audio {
+            picker.st(format!("(•) {}   ", audio.label()), logo)
+        } else {
+            picker.dim(format!("( ) {}   ", audio.label()))
+        };
+    }
+    lines.push(picker.line());
     lines.push(blank());
     lines.push(section("AUTHOR", ""));
     lines.push(Ln::new().raw("   Manuel Boldrer  ").st("https://manuelboldrer.github.io/", link).line());

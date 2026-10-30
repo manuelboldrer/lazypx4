@@ -38,6 +38,18 @@ the terminal bell, so tmux flags the window even when you're looking at
 another pane, and beep five times (`[alerts] sound` takes a sound file instead,
 `""` for the bell only; `repeat` sets the count). `A` acknowledges.
 
+The About screen picks the alert sound with `←` `→`, for this run: Mute (no
+bell, sound or voice; the banner still flashes), Ring (the default; Mute if
+`[alerts] bell = false`), or Italian, British, American or Dutch, which ring
+once and then say what happened, fast. Fleet view always rings.
+
+Speech uses [Piper](https://github.com/OHF-Voice/piper1-gpl) neural voices:
+`uv tool install piper-tts`, then put `it_IT-paola-medium`, `en_GB-alba-medium`,
+`en_US-lessac-medium` and `nl_NL-ronnie-medium` (`.onnx` and `.onnx.json`, from
+[piper-voices](https://huggingface.co/rhasspy/piper-voices)) in
+`~/.local/share/lazypx4/voices`. Without them it falls back to `spd-say`
+(speech-dispatcher).
+
 ### Preflight (`y`)
 
 One screen, one verdict (GO / GO with warnings / NO-GO): link, PX4's own

@@ -410,9 +410,11 @@ pub struct State {
     pub pending_arm: Option<PendingArm>,
 
     /// Unacknowledged alerts (time, text), oldest first - the flashing
-    /// banner. `alert_bell` asks the main loop to ring the terminal bell.
+    /// banner. `alert_bell` asks the main loop to ring the terminal bell,
+    /// `alert_voice` holds the new ones for it to speak.
     pub alerts: Vec<(String, String)>,
     pub alert_bell: bool,
+    pub alert_voice: Vec<String>,
     /// Last EKF verdict an alert was raised for ("" = healthy).
     pub ekf_alert_verdict: String,
 
@@ -609,7 +611,8 @@ impl State {
         if self.alerts.len() >= MAX_ALERTS {
             self.alerts.remove(0);
         }
-        self.alerts.push((chrono::Local::now().format("%H:%M:%S").to_string(), text));
+        self.alerts.push((chrono::Local::now().format("%H:%M:%S").to_string(), text.clone()));
+        self.alert_voice.push(text);
         self.alert_bell = true;
     }
 

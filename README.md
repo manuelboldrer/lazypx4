@@ -22,7 +22,7 @@ and [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by
 - **Dashboard** — GPS, battery, position, flight mode, and the health of the onboard computer, all on one screen
 - **Flight control** — arm, take off, land, return home, change modes, fly to a point
 - **Preflight check** — a single GO / NO-GO screen before you fly
-- **Alerts** — flashing warning and a beep on link loss, low battery or failsafes
+- **Alerts** — flashing warning, a beep or a spoken message (Italian, British, American or Dutch, picked on the About screen) on link loss, low battery or failsafes
 - **Mission map** — see where the drone is, load waypoints and geofences
 - **Parameters, logs, calibration, firmware** — the usual setup tasks, without leaving the terminal
 - **Payload** — aim the gimbal, take photos / video, operate a gripper, winch or spare outputs

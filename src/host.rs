@@ -523,45 +523,55 @@ const SOUND_GAP: Duration = Duration::from_millis(150);
 /// background. BEL alone is silent under many setups (sway, VTE with the
 /// audible bell off). `sound` is "beep" (a generated square-wave beep), a
 /// sound file, or "" for the bell only; the first player found plays it:
-/// paplay, pw-play, then aplay.
-pub fn ring_alert(sound: &str, repeat: u32) {
+/// paplay, pw-play, then aplay. `speech` is spoken after a single ring, so
+/// the information doesn't wait behind the full pattern.
+pub fn ring_alert(sound: &str, repeat: u32, speech: Vec<crate::voice::Message>) {
     use std::io::Write;
     let mut out = std::io::stdout();
     let _ = out.write_all(b"\x07");
     let _ = out.flush();
 
-    if sound.is_empty() || repeat == 0 {
+    if (sound.is_empty() || repeat == 0) && speech.is_empty() {
         return;
     }
     let sound = sound.to_string();
+    let repeat = if speech.is_empty() { repeat } else { repeat.min(1) };
     // Its own thread so a slow player never stalls the UI, and so the child
     // is reaped instead of left as a zombie.
     let _ = std::thread::Builder::new().name("AlertSound".into()).spawn(move || {
-        // The beep pattern is one file holding every repetition, so the
-        // spacing stays tight; a sound file is played `repeat` times.
-        let (path, plays) = if sound == BEEP_SOUND {
-            match beep_file(repeat) {
-                Some(p) => (p, 1),
-                None => return,
-            }
-        } else {
-            (std::path::PathBuf::from(&sound), repeat)
-        };
-        if !path.is_file() {
-            return;
-        }
-        for i in 0..plays {
-            if i > 0 {
-                std::thread::sleep(SOUND_GAP);
-            }
-            if !play(&path) {
-                return;
-            }
-        }
+        play_alert_sound(&sound, repeat);
+        crate::voice::say(speech);
     });
 }
 
-fn play(path: &std::path::Path) -> bool {
+fn play_alert_sound(sound: &str, repeat: u32) {
+    if sound.is_empty() || repeat == 0 {
+        return;
+    }
+    // The beep pattern is one file holding every repetition, so the
+    // spacing stays tight; a sound file is played `repeat` times.
+    let (path, plays) = if sound == BEEP_SOUND {
+        match beep_file(repeat) {
+            Some(p) => (p, 1),
+            None => return,
+        }
+    } else {
+        (std::path::PathBuf::from(sound), repeat)
+    };
+    if !path.is_file() {
+        return;
+    }
+    for i in 0..plays {
+        if i > 0 {
+            std::thread::sleep(SOUND_GAP);
+        }
+        if !play(&path) {
+            return;
+        }
+    }
+}
+
+pub fn play(path: &std::path::Path) -> bool {
     ["paplay", "pw-play", "aplay"].iter().any(|player| {
         Command::new(player)
             .arg(path)

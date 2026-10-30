@@ -16,6 +16,7 @@ use crate::mav::{calibration, commands, flightlog, params, shell};
 use crate::parammeta::ParamMeta;
 use crate::state::{self, Shared, State, now};
 use crate::ui;
+use crate::voice::AlertAudio;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -180,6 +181,9 @@ pub struct Session {
     pub main_scroll: usize,
     pub main_scroll_screen: Screen,
 
+    /// Alert sound, picked on the About screen; lasts for this run.
+    pub alert_audio: AlertAudio,
+
     pub mode_index: usize,
     pub log_scroll: usize,
     /// Event-log rows visible last frame - set by the renderer.
@@ -241,6 +245,7 @@ impl Session {
             nav_index: 0,
             main_scroll: 0,
             main_scroll_screen: Screen::Dashboard,
+            alert_audio: AlertAudio::Ring,
             mode_index: 0,
             log_scroll: 0,
             log_page: 20,
@@ -421,7 +426,10 @@ impl App {
         let ros_thread = crate::ros::spawn(ros.clone(), shared.clone(), &settings, shutdown.clone());
 
         let mut app = App {
-            session: Session::new(),
+            session: Session {
+                alert_audio: if settings.alert_bell { AlertAudio::Ring } else { AlertAudio::Mute },
+                ..Session::new()
+            },
             shared,
             link,
             meta,
@@ -505,8 +513,11 @@ impl App {
 
         let mut st = state::lock(&self.shared);
 
-        if std::mem::take(&mut st.alert_bell) && self.settings.alert_bell {
-            crate::host::ring_alert(&self.settings.alert_sound, self.settings.alert_repeat);
+        let spoken = std::mem::take(&mut st.alert_voice);
+        let audio = self.session.alert_audio;
+        if std::mem::take(&mut st.alert_bell) && audio != AlertAudio::Mute {
+            let speech = audio.language().map_or(Vec::new(), |lang| spoken.iter().map(|a| crate::voice::message(a, lang)).collect());
+            crate::host::ring_alert(&self.settings.alert_sound, self.settings.alert_repeat, speech);
         }
 
         service_vehicle(&self.link, &mut st, &self.settings);
@@ -1217,6 +1228,10 @@ impl App {
                 } else if screen == Screen::Control && key == "r" {
                     self.configure_streams_async();
                     state::lock(&self.shared).info("Re-requested control / setpoint streams");
+                } else if screen == Screen::About && (key == "LEFT" || key == "RIGHT") {
+                    let step = if key == "LEFT" { -1 } else { 1 };
+                    self.session.alert_audio = self.session.alert_audio.cycled(step);
+                    crate::voice::warm(self.session.alert_audio.language());
                 } else {
                     self.scroll_main(&key);
                 }

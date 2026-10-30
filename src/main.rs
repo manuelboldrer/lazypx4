@@ -27,6 +27,7 @@ mod satellite;
 mod state;
 mod suspend;
 mod ui;
+mod voice;
 
 use std::io::IsTerminal;
 

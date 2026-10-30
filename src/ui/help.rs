@@ -119,7 +119,7 @@ fn screen_keys(screen: Screen) -> (Keys, bool) {
         ],
         Screen::Firmware => &[("↑↓", "firmware file"), ("←→", "serial port"), ("ENTER", "flash"), ("r", "refresh"), ("f", "back")],
         Screen::Preflight => &[("y", "back")],
-        Screen::About => &[],
+        Screen::About => &[("← →", "alert sound: mute, ring, or a spoken language")],
     };
     (keys, matches!(screen, Screen::Dashboard | Screen::Map))
 }

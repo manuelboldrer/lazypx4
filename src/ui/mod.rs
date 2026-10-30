@@ -332,7 +332,7 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
             "←↑↓→ aim gimbal · [p] photo [i] interval [v] video · [g] gripper [w] winch [s] actuator · ? keys · [o] back".into(),
         ),
         Screen::Calibration => (other::calibration(ctx), "[g]yro [a]ccel [l]evel [c]ompass [b]aro · [r] re-request · [s] back".into()),
-        Screen::About => (other::about(), "ESC panels".into()),
+        Screen::About => (other::about(ctx), "←→ alert sound · ESC panels".into()),
         Screen::Preflight => (preflight::draw(ctx), "[y] back · ESC panels · ? keys".into()),
         Screen::Map => (map::draw(ctx), "j/k scroll · keys listed below the map · [n] back · ESC panels".into()),
         Screen::Host => (hostui::host(ctx), "[i] speed test · [u] back · ESC panels".into()),
