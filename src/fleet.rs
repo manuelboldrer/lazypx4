@@ -573,7 +573,7 @@ impl Fleet<'_> {
                     self.prompt = Some(Prompt::Confirm { text, buffer: String::new(), command, targets });
                 }
                 Ok(Goto::Target(prompt, target)) => {
-                    let prompt = if targets.len() > 1 { prompt.replace("GOTO [relative]", "GOTO [relative, each in its own body frame]") } else { prompt };
+                    let prompt = if targets.len() > 1 { prompt.replace("GOTO [relative]", "GOTO [relative, each in its own body frame]").replace("GOTO [home]  over the takeoff position", "GOTO [home]  each over its own takeoff position") } else { prompt };
                     let text = format!("{} - {}", self.names(&targets), prompt);
                     self.prompt = Some(Prompt::Confirm { text, buffer: String::new(), command: Command::Goto(target), targets });
                 }
@@ -1276,7 +1276,7 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
                 let ask = match kind {
                     InputKind::Takeoff => format!("Takeoff altitude in metres for {who} (blank = 2.5):"),
                     InputKind::Mode => format!("Flight mode for {who} (e.g. posctl, hold, mission, offboard):"),
-                    InputKind::Goto => format!("Goto for {who}: [r] fwd right down [yaw] · l N E D [yaw] · g lat lon alt [yaw]   e.g. 10 0 -2"),
+                    InputKind::Goto => format!("Goto for {who}: [r] fwd right down [yaw] · l N E D [yaw] · g lat lon alt [yaw] · h [yaw] (home, current alt)   e.g. 10 0 -2"),
                 };
                 vec![
                     Line::from(vec![Span::styled(" INPUT   ", bar), Span::raw("  "), Span::raw(ask)]),

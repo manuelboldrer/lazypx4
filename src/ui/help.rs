@@ -46,7 +46,7 @@ fn screen_keys(screen: Screen) -> (Keys, bool) {
             ("y", "preflight go / no-go"),
         ],
         Screen::Map => &[
-            ("g", "goto: rel  10 0 -2 · local  l 5 -3 -10 · global  g lat lon alt"),
+            ("g", "goto: rel  10 0 -2 · local  l 5 -3 -10 · global  g lat lon alt · home  h"),
             ("x", "arm keyboard jog"),
             ("  k j / a d", "jog: forward, back / left, right"),
             ("  w s / h l", "jog: up, down / yaw"),

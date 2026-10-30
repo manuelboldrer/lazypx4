@@ -115,6 +115,28 @@ pub fn goto_global(link: &Link, st: &mut State, lat: f64, lon: f64, amsl: f64, y
     true
 }
 
+/// Back over the home (takeoff) position, holding the current altitude.
+pub fn goto_home(link: &Link, st: &mut State, yaw: Option<f64>) -> bool {
+    if !armed_or_refuse(st, link) {
+        return false;
+    }
+    if !st.home_set {
+        st.error("Goto (home) refused: no home position yet");
+        return false;
+    }
+    if !st.global_pos_valid {
+        st.error("Goto (home) refused: no global position (need a GPS fix)");
+        return false;
+    }
+    let (lat, lon, amsl) = (st.home_lat, st.home_lon, st.global_alt);
+    if !send_reposition(link, lat, lon, amsl, yaw) {
+        st.error("Failed to send goto");
+        return false;
+    }
+    st.command(format!("GOTO (DO_REPOSITION) SENT [home]: {lat:.7}, {lon:.7} @ {amsl:.1} m MSL (current alt)"));
+    true
+}
+
 // ---------------------------------------------------------------------------
 // Waypoint queue ([W] / [C])
 // ---------------------------------------------------------------------------

@@ -133,6 +133,8 @@ pub enum GotoTarget {
     Local(f64, f64, f64, Option<f64>),
     /// lat, lon, AMSL.
     Global(f64, f64, f64, Option<f64>),
+    /// Over the home (takeoff) position at the current altitude.
+    Home(Option<f64>),
 }
 
 /// What a single-line text input feeds.
@@ -1740,6 +1742,7 @@ pub(crate) fn send_goto(link: &Link, st: &mut State, target: GotoTarget) -> bool
         GotoTarget::Body(f, r, d, y) => crate::mav::guided::goto_body(link, st, f, r, d, y, false),
         GotoTarget::Local(n, e, d, y) => crate::mav::guided::goto_local(link, st, n, e, d, y),
         GotoTarget::Global(la, lo, a, y) => crate::mav::guided::goto_global(link, st, la, lo, a, y),
+        GotoTarget::Home(y) => crate::mav::guided::goto_home(link, st, y),
     }
 }
 

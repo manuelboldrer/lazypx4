@@ -77,7 +77,7 @@ cross-check. Flight keys work here too.
 
 | Key | |
 |-----|--|
-| `g` | Goto — relative `10 0 -2`, local NED `l 5 -3 -10`, or global `g lat lon alt` |
+| `g` | Goto — relative `10 0 -2`, local NED `l 5 -3 -10`, global `g lat lon alt`, or `h [yaw]` back over home (the takeoff position) at the current altitude |
 | `x` | Keyboard jog (`k`/`j`/`a`/`d` move, `w`/`s` up/down, `h`/`l` yaw, `[`/`]` step) |
 | `o` / `O` | Load a `.kml` or QGC `.plan` (fence + waypoints) / upload the fence to PX4 |
 | `M` | Upload the loaded `.plan` mission to PX4 (`:mode mission` flies it) |

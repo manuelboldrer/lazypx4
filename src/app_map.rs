@@ -34,7 +34,7 @@ pub enum Goto {
     Target(String, GotoTarget),
 }
 
-/// `[r|l|g|f] a b c [yaw]` - the [g] goto syntax, shared with the fleet.
+/// `[r|l|g|f|h] a b c [yaw]` - the [g] goto syntax, shared with the fleet.
 pub fn parse_goto(text: &str) -> Result<Goto, String> {
     let text = text.replace(',', " ");
     let mut tokens: Vec<&str> = text.split_whitespace().collect();
@@ -46,6 +46,7 @@ pub fn parse_goto(text: &str) -> Result<Goto, String> {
         "l" | "local" => Some("local"),
         "g" | "global" => Some("global"),
         "f" | "fire" => Some("fire"),
+        "h" | "home" | "takeoff" => Some("home"),
         _ => None,
     };
     if frame.is_some() {
@@ -57,6 +58,13 @@ pub fn parse_goto(text: &str) -> Result<Goto, String> {
     let frame = frame.unwrap_or("relative");
     if frame == "fire" {
         return Ok(Goto::Fire(nums));
+    }
+    // Home is resolved per vehicle when sent, so a fleet goto sends each
+    // vehicle back over its own takeoff point at its own altitude.
+    if frame == "home" {
+        let yaw = nums.first().copied();
+        let yaw_text = yaw.map(|y| format!("  yaw {y:.0}")).unwrap_or_default();
+        return Ok(Goto::Target(format!("GOTO [home]  over the takeoff position, current altitude{yaw_text}. Type YES"), GotoTarget::Home(yaw)));
     }
     if nums.len() < 3 {
         return Err("Goto: need three numbers (plus an optional yaw)".into());
@@ -257,7 +265,7 @@ impl App {
         }
         self.request_input(
             "Goto: [r] fwd right down [yaw] (default)  |  [l] N E D [yaw]  |  [g] lat lon alt [yaw]  |  \
-             [f] fire [alt MSL] [yaw]   e.g.  10 0 -2   or   l 5 -3 -10   or   g 52.218650 6.886870 40   or   f",
+             [f] fire [alt MSL] [yaw]  |  [h] home [yaw]   e.g.  10 0 -2   or   l 5 -3 -10   or   g 52.218650 6.886870 40   or   f   or   h",
             InputKind::Goto,
         );
     }

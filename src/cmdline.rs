@@ -30,7 +30,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     cmd("offboard", &["ob"], "offboard [on|off]", "enter / leave OFFBOARD (no argument toggles)"),
     cmd("kill", &[], "kill", "flight termination: stop the motors NOW"),
     cmd("mode", &[], "mode <name>", "set a flight mode (TAB completes the names)"),
-    cmd("goto", &["go"], "goto [r|l|g|f] a b c [yaw]", "same syntax as [g] on the map"),
+    cmd("goto", &["go"], "goto [r|l|g|f|h] a b c [yaw]", "same syntax as [g] on the map"),
     cmd("sethome", &[], "sethome", "set home to the current position"),
     cmd("ekfreset", &[], "ekfreset", "ekf stop / ekf start through the NSH shell"),
     cmd("reboot", &[], "reboot", "reboot PX4"),
