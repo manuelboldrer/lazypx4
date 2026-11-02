@@ -82,7 +82,7 @@ pub struct FileConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct LinkFile {
     pub port: Option<u16>,
-    /// Record every session to a .tlog (default true).
+    /// Record every session to a .tlog (default false; --tlog turns it on).
     pub record_tlog: Option<bool>,
 }
 

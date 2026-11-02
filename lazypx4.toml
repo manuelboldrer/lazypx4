@@ -6,7 +6,7 @@
 
 [link]
 # port = 14560                      # UDP port PX4 sends MAVLink to
-# record_tlog = true                # write every session to a .tlog
+# record_tlog = false               # write every session to a .tlog (or run with --tlog)
 
 [paths]
 # tlog_dir = "./px4_tlogs"          # session telemetry (.tlog), see [link] record_tlog

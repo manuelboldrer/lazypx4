@@ -114,11 +114,15 @@ struct Cli {
     #[arg(long)]
     use_sim_time: bool,
 
-    /// Directory for the session .tlog [default: ./px4_tlogs]
+    /// Directory for the session .tlog (implies --tlog) [default: ./px4_tlogs]
     #[arg(long, value_name = "DIR")]
     tlog_dir: Option<String>,
 
-    /// Don't record the session to a .tlog
+    /// Record the session to a .tlog (off by default)
+    #[arg(long, conflicts_with = "no_tlog")]
+    tlog: bool,
+
+    /// Don't record the session to a .tlog (the default; overrides record_tlog in the settings file)
     #[arg(long)]
     no_tlog: bool,
 
@@ -190,7 +194,7 @@ fn main() -> std::process::ExitCode {
             }
         }
     };
-    let record_tlog = !cli.no_tlog && cli.replay.is_none() && file.link.record_tlog.unwrap_or(true);
+    let record_tlog = !cli.no_tlog && cli.replay.is_none() && (cli.tlog || cli.tlog_dir.is_some() || file.link.record_tlog.unwrap_or(false));
     let (paths, ros, safety) = (file.paths, file.ros, file.safety);
     let pick = |flag: Option<String>, from_file: Option<String>, default: &str| {
         flag.or(from_file).unwrap_or_else(|| default.into())

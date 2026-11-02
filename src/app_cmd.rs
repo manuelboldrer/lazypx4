@@ -321,7 +321,7 @@ impl App {
                     (Some(p), _) => format!("Recording telemetry to {}", p.display()),
                     (None, Some(dir)) => format!("Telemetry will be recorded to {dir}/ from the first packet"),
                     (None, None) if self.link.is_replay() => "Replaying - not recording".into(),
-                    (None, None) => "Telemetry recording is off ([link] record_tlog / --no-tlog)".into(),
+                    (None, None) => "Telemetry recording is off (start with --tlog, or [link] record_tlog = true)".into(),
                 };
                 state::lock(&self.shared).info(text);
             }

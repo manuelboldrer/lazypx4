@@ -157,9 +157,10 @@ Logs load in the background, telemetry keeps flowing.
 
 ## Recording, replay and fleets
 
-Every session is recorded to `./px4_tlogs/*.tlog` (both directions, the
-standard format MAVExplorer / pymavlink / QGC read); `--no-tlog` turns it
-off. Replay one without a vehicle — nothing is sent:
+With `--tlog` (or `record_tlog = true` under `[link]` in the settings file)
+the session is recorded to `./px4_tlogs/*.tlog` (both directions, the
+standard format MAVExplorer / pymavlink / QGC read); `--tlog-dir DIR` records
+there instead. Recording is off by default. Replay one without a vehicle — nothing is sent:
 
 ```bash
 lazypx4 --replay px4_tlogs/lazypx4_20260930_163553_p14560.tlog --replay-speed 4

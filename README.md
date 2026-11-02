@@ -28,7 +28,7 @@ and [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by
 - **Flight review** — open a `.ulg` and page through Flight Review plots (attitude, rates, vibration, spectra, failsafes, EKF...) right in the terminal
 - **Payload** — aim the gimbal, take photos / video, operate a gripper, winch or spare outputs
 - **Fleet view** — watch and command several drones side by side
-- **Recording & replay** — every session is saved and can be played back later
+- **Recording & replay** — with `--tlog`, the session is saved and can be played back later
 - **ROS 2 (optional)** — shows LiDAR scans and planned paths on the map
 
 Everything is a single keypress away, with vim-style navigation. Anything that
