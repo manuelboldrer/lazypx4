@@ -26,6 +26,10 @@ mod tlog;
 mod satellite;
 mod state;
 mod suspend;
+mod ulog;
+mod review;
+mod plot;
+mod app_review;
 mod ui;
 mod voice;
 

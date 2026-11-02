@@ -18,7 +18,8 @@ Full list of keys, commands and options. Press `?` inside lazypx4 to see the key
 | `o` | Payload — gimbal, camera, gripper / winch, actuators — see below |
 | `p` | Parameters — browse, search, edit, decoded values, key-parameter panel, `s` save / `l` load / `D` diff a param file |
 | `s` | Sensor calibration |
-| `l` | Flight logs — download `.ulg`, upload to flight review, `ecl_ekf` check |
+| `l` | Flight logs — download `.ulg`, upload to flight review, `ecl_ekf` check, `v` review the last download |
+| `v` | Flight review — plot a `.ulg` — see below |
 | `g` | Event log |
 | `t` | MAVLink shell (NuttShell) |
 | `f` | Flash firmware (`px_uploader.py`) |
@@ -130,6 +131,30 @@ ask for `YES`.
   command itself and repeats it until PX4 acknowledges it — keep lazypx4
   running and the link up until it has.
 
+### Flight review (`v`)
+
+Plots a PX4 `.ulg` inside lazypx4: the Flight Review pages of
+[lazyjagg](../../lazyjagg) (overview, failsafe flags, attitude, rates,
+position, velocity, control, sensors, spectra, EV / estimator / innovations,
+tracking errors, actuators, link, IMU, motors, battery, environment,
+system), drawn in braille so they work over SSH and in tmux. A page or plot
+only appears if the log has data for it.
+
+The screen lists the `.ulg` files in the log directory (`--log-dir`, where
+`l` downloads go), newest first; `ENTER` loads one, `o` browses for any
+other file. On FLIGHT LOGS, `v` opens the last completed download directly.
+Logs load in the background, telemetry keeps flowing.
+
+| Key | |
+|---|---|
+| `[` `]` / `PGUP` `PGDN` · `1`-`9` | Previous / next page · page by number |
+| `j` `k` / `↑` `↓` · `ENTER` / `z` | Focus a plot · enlarge it |
+| `h` `l` / `←` `→` · `H` `L` | Tracker by 1% / 10% of the window; legends show values there |
+| `+` `-` · `0` | Zoom around the tracker · whole log |
+| `<` `>` | Pan the window |
+| `n` `N` · `m` | Tracker to the next / previous log message (failsafe flags and mode changes included) · message list |
+| `o` · `x` · `v` | Open another log · close it · back |
+
 ## Recording, replay and fleets
 
 Every session is recorded to `./px4_tlogs/*.tlog` (both directions, the
@@ -187,10 +212,10 @@ Command-line flags override the file.
 
 ## File browser
 
-`o` (map), `l` and `D` (parameters) open a ranger-style browser instead of a
+`o` (map, flight review), `l` and `D` (parameters) open a ranger-style browser instead of a
 path prompt. It starts in the last directory you picked from (the parameter
 dir / the loaded `.kml`'s dir the first time) and lists only matching files
-(`.kml` `.plan`, or `.params` `.param` `.txt` `.yaml` `.yml`).
+(`.kml` `.plan`, `.ulg`, or `.params` `.param` `.txt` `.yaml` `.yml`).
 
 | Key | |
 |---|---|

@@ -25,6 +25,7 @@ and [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by
 - **Alerts** — flashing warning, a beep or a spoken message (Italian, British, American or Dutch, picked on the About screen) on link loss, low battery or failsafes
 - **Mission map** — see where the drone is, load waypoints and geofences
 - **Parameters, logs, calibration, firmware** — the usual setup tasks, without leaving the terminal
+- **Flight review** — open a `.ulg` and page through Flight Review plots (attitude, rates, vibration, spectra, failsafes, EKF...) right in the terminal
 - **Payload** — aim the gimbal, take photos / video, operate a gripper, winch or spare outputs
 - **Fleet view** — watch and command several drones side by side
 - **Recording & replay** — every session is saved and can be played back later
@@ -74,6 +75,7 @@ mavlink start -u 14560 -o 14560 -t <your-computer-ip> -m onboard -r 4000000
 | `n` | Map |
 | `p` | Parameters |
 | `l` | Flight logs |
+| `v` | Flight review: plot a `.ulg` |
 | `:` | Type a command (e.g. `:takeoff 5`) |
 | `?` | Help for the current screen |
 | `q` | Quit / go back |

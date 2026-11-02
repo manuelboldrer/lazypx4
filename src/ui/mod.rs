@@ -14,6 +14,7 @@ pub mod map;
 mod other;
 mod payload;
 mod picker;
+mod review;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -293,6 +294,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_keybar(frame, keybar, &footer, &scroll_note);
     draw_prompt(frame, app, prompt);
     drop(st);
+    if screen == Screen::Review {
+        review::draw(frame, &mut app.review, inner);
+    }
     if app.session.help_open {
         help::draw(frame, body, screen, &mut app.session.help_scroll);
     } else if let Some(p) = &app.session.picker {
@@ -323,7 +327,15 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
         Screen::Log => (lists::event_log(ctx), "↑↓ scroll · PGUP/PGDN page · [c] clear · / search · [g] back".into()),
         Screen::FlightLogs => (
             lists::flight_logs(ctx),
-            "ENTER download · [u] upload last to web · [a] EKF check · [r] refresh · ESC/x cancel · [l] back".into(),
+            "ENTER download · [v] review last · [u] upload last to web · [a] EKF check · [r] refresh · ESC/x cancel · [l] back".into(),
+        ),
+        Screen::Review => (
+            Vec::new(),
+            if ctx.app.review.log.is_some() {
+                "[ ] page · ↑↓ plot · ENTER enlarge · ←→ tracker (H L ×10) · + - zoom · < > pan · 0 all · n/N message · [m] messages · [o] open · [x] close · [v] back".into()
+            } else {
+                "↑↓ select · ENTER plot · [o] browse for a .ulg · [r] rescan · [v] back · ESC panels".into()
+            },
         ),
         Screen::Shell => (lists::shell(ctx), "ENTER run · ↑↓ history · ←→ edit · PGUP/PGDN scroll · CTRL-C interrupt · CTRL-L clear · ESC panels".into()),
         Screen::Control => (other::control(ctx), "[r] re-request streams · [c] back · ESC panels".into()),

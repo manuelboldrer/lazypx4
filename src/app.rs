@@ -27,6 +27,7 @@ pub enum Screen {
     Parameters,
     Log,
     FlightLogs,
+    Review,
     Shell,
     Host,
     Control,
@@ -46,6 +47,7 @@ pub const NAV_ITEMS: &[(Screen, &str, Option<char>)] = &[
     (Screen::Parameters, "PARAMETERS", Some('p')),
     (Screen::Log, "EVENT LOG", Some('g')),
     (Screen::FlightLogs, "FLIGHT LOGS", Some('l')),
+    (Screen::Review, "FLIGHT REVIEW", Some('v')),
     (Screen::Shell, "NSH SHELL", Some('t')),
     (Screen::Host, "USB / NETWORK", Some('u')),
     (Screen::Control, "CONTROL", Some('c')),
@@ -62,6 +64,7 @@ impl Screen {
             Screen::ModeSelect => "PX4 FLIGHT MODE SELECT",
             Screen::Log => "PX4 EVENT · WARNING · FAILSAFE LOG",
             Screen::FlightLogs => "PX4 FLIGHT LOGS",
+            Screen::Review => "FLIGHT REVIEW · PX4 ULOG PLOTS",
             Screen::Firmware => "PX4 FIRMWARE FLASH",
             Screen::Parameters => "PX4 PARAMETERS",
             Screen::Control => "PX4 CONTROL / SETPOINTS · RC",
@@ -80,7 +83,7 @@ impl Screen {
     pub fn scrolls_as_page(self) -> bool {
         !matches!(
             self,
-            Screen::ModeSelect | Screen::Parameters | Screen::Log | Screen::FlightLogs | Screen::Shell
+            Screen::ModeSelect | Screen::Parameters | Screen::Log | Screen::FlightLogs | Screen::Shell | Screen::Review
         )
     }
 
@@ -156,6 +159,8 @@ pub enum InputKind {
     Gripper,
     Winch,
     Actuator,
+    /// A .ulg for the flight-review pane.
+    ReviewLog,
 }
 
 pub struct Confirm {
@@ -292,6 +297,8 @@ pub struct App {
     pub sys: Arc<Mutex<crate::host::SystemStats>>,
     pub net: Arc<Mutex<crate::host::NetStats>>,
     pub jobs: crate::jobs::Jobs,
+    /// [v] flight-review pane: log list, loader and the loaded log.
+    pub review: crate::app_review::ReviewState,
     pub(crate) log_rx: Arc<Mutex<Receiver<flightlog::Chunk>>>,
     pub(crate) shutdown: Arc<AtomicBool>,
     ros_thread: Option<std::thread::JoinHandle<()>>,
@@ -438,6 +445,7 @@ impl App {
             sys,
             net,
             jobs: Default::default(),
+            review: Default::default(),
             log_rx: Arc::new(Mutex::new(log_rx)),
             shutdown,
             ros_thread,
@@ -521,6 +529,9 @@ impl App {
         }
 
         service_vehicle(&self.link, &mut st, &self.settings);
+        drop(st);
+        self.review_poll();
+        let mut st = state::lock(&self.shared);
         if self.session.screen == Screen::Payload {
             crate::mav::payload::poll_camera(&self.link, &mut st);
         }
@@ -553,9 +564,11 @@ impl App {
     /// Browse for the file `kind` loads; TAB in the browser falls back to
     /// typing `prompt`.
     pub(crate) fn request_file(&mut self, prompt: impl Into<String>, kind: InputKind) {
-        let (group, exts): (&'static str, &'static [&'static str]) = match kind {
-            InputKind::Kml => ("kml", &["kml", "plan"]),
-            _ => ("params", &["params", "param", "txt", "yaml", "yml"]),
+        let group = picker_group(kind);
+        let exts: &'static [&'static str] = match group {
+            "kml" => &["kml", "plan"],
+            "ulog" => &["ulg"],
+            _ => &["params", "param", "txt", "yaml", "yml"],
         };
         let start = match self.session.picker_dirs.get(group) {
             Some(dir) => dir.clone(),
@@ -564,6 +577,7 @@ impl App {
                 let loaded = if loaded.is_empty() { self.settings.kml_path.clone().unwrap_or_default() } else { loaded };
                 std::path::Path::new(&loaded).parent().map(|p| p.to_path_buf()).unwrap_or_default()
             }
+            None if group == "ulog" => self.review_dir(),
             None => self.resolve_param_path(&self.settings.param_dir.clone()),
         };
         let start = if start.as_os_str().is_empty() { std::path::PathBuf::from(".") } else { start };
@@ -582,13 +596,13 @@ impl App {
             }
             crate::picker::Outcome::Pick(path) => {
                 let picker = self.session.picker.take().unwrap();
-                let group = if matches!(picker.kind, InputKind::Kml) { "kml" } else { "params" };
-                self.session.picker_dirs.insert(group, picker.dir.clone());
+                self.session.picker_dirs.insert(picker_group(picker.kind), picker.dir.clone());
                 let text = path.display().to_string();
                 match picker.kind {
                     InputKind::Kml => self.load_kml(&text),
                     InputKind::ParamLoad => self.param_load_submit(&text),
                     InputKind::ParamDiff => self.cmd_param_diff(&text, None),
+                    InputKind::ReviewLog => self.review_open_path(&text),
                     _ => {}
                 }
             }
@@ -643,6 +657,7 @@ impl App {
                     InputKind::Gripper => self.gripper_submit(&input.buffer),
                     InputKind::Winch => self.winch_submit(&input.buffer),
                     InputKind::Actuator => self.actuator_submit(&input.buffer),
+                    InputKind::ReviewLog => self.review_open_path(&input.buffer),
                     InputKind::ParamDiff => {
                         let files: Vec<String> = input.buffer.split_whitespace().map(str::to_string).collect();
                         if !files.is_empty() {
@@ -954,6 +969,7 @@ impl App {
     pub(crate) fn open_screen(&mut self, screen: Screen) {
         self.session.screen = screen;
         match screen {
+            Screen::Review => self.review_opened(),
             Screen::Log => {
                 let total = state::lock(&self.shared).events.len();
                 self.session.log_scroll = total.saturating_sub(self.session.log_page);
@@ -1215,6 +1231,7 @@ impl App {
             Screen::Log => self.handle_log_key(&key),
             Screen::ModeSelect => self.handle_mode_key(&key),
             Screen::FlightLogs => self.handle_flight_log_key(&key),
+            Screen::Review => self.handle_review_key(&key),
             Screen::Calibration => self.handle_calibration_key(&key),
             Screen::Dashboard => self.handle_dashboard_key(&key),
             screen => {
@@ -1520,6 +1537,11 @@ impl App {
                 let path = (st.dl_status == "COMPLETE" && std::path::Path::new(&st.dl_path).is_file()).then(|| st.dl_path.clone());
                 drop(st);
                 self.upload_or_analyze(key == "u", path);
+            }
+            "v" => {
+                let path = (st.dl_status == "COMPLETE" && std::path::Path::new(&st.dl_path).is_file()).then(|| st.dl_path.clone());
+                drop(st);
+                self.review_last_download(path);
             }
             "UP" if count > 0 => *i = (*i + count - 1) % count,
             "DOWN" if count > 0 => *i = (*i + 1) % count,
@@ -1873,5 +1895,14 @@ fn update_health(st: &mut State, battery_low: f64, battery_critical: f64) {
             st.battery_low_active = false;
             st.info("Battery recovered above low threshold");
         }
+    }
+}
+
+/// Which remembered browser directory a file prompt starts from.
+fn picker_group(kind: InputKind) -> &'static str {
+    match kind {
+        InputKind::Kml => "kml",
+        InputKind::ReviewLog => "ulog",
+        _ => "params",
     }
 }
