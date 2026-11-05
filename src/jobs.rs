@@ -253,7 +253,7 @@ pub fn start_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmw
 // ---------------------------------------------------------------------------
 
 /// Best-effort copy to the clipboard: wl-copy (Wayland), else xclip.
-fn copy_to_clipboard(text: &str) -> bool {
+pub(crate) fn copy_to_clipboard(text: &str) -> bool {
     for (bin, args) in [("wl-copy", &[][..]), ("xclip", &["-selection", "clipboard"][..])] {
         let Ok(mut child) = Command::new(bin).args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
             continue;

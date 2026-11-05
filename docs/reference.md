@@ -24,6 +24,7 @@ Full list of keys, commands and options. Press `?` inside lazypx4 to see the key
 | `t` | MAVLink shell (NuttShell) |
 | `f` | Flash firmware (`px_uploader.py`) |
 | `u` | USB / network check |
+| `e` | Record — tlog, tmux panes, rosbag, screen, markers — see below |
 | `:` | Command line — see below |
 | `?` | Keys for the current screen |
 | `A` | Acknowledge the alert banner |
@@ -156,6 +157,42 @@ Logs load in the background, telemetry keeps flowing.
 | `o` · `x` · `v` | Open another log · close it · back |
 
 ## Recording, replay and fleets
+
+### Record (`e`)
+
+lazyrec in a single pane. `R` opens a run, `<dir>/<date>_<time>/` (default
+`~/logs`), and starts every recorder marked `[x]`:
+
+| Recorder | Output | |
+|---|---|---|
+| mavlink tlog | `mavlink/telemetry.tlog` | written from lazypx4's own link, both directions; no extra mavlink-router endpoint needed |
+| tmux panes | `tmux/window-N_<name>_pane-M.txt` | scrollback + live output of every pane (lazypx4's own pane is skipped); panes opened mid-run are picked up too |
+| rosbag | `rosbag/bag/` | `ros2 bag record -a` minus `rosbag_exclude`; alert if the bag stops growing |
+| system | `system.csv` | host CPU / RAM / disk + vehicle link, arm state, mode, battery, altitude, position, GPS, once a second |
+| ping | `net/ping_<name>.log` | one per `ping` entry; alert after 5 lost replies in a row |
+| screen | `screen/screen_<time>.mkv` | wf-recorder (sway / wlroots) or ffmpeg x11grab; `V` toggles it |
+| your own | `<name>.log` | each `[[record.command]]`; optional alert regex |
+
+| Key | |
+|-----|--|
+| `R` / `S` | Record all (new run if none is open) / stop all |
+| `F` | Finish: stop, `px4/params_end.txt`, `manifest.json` + `summary.md`, then name the run (`<run>_<name>`) |
+| `j` `k` / `ENTER` / `i` | Select / start-stop one recorder / include it in `R` |
+| `1`–`9` / `M` | Quick marker (`[record] markers`) / marker with a note (`label: note`) -> `markers.csv`, `notes.md` |
+| `p` / `u` | Download the newest PX4 log into `<run>/px4/` / upload it to Flight Review (link saved to `flight_review_link.txt`) |
+| `E` / `Y` | Rename the run / copy its path |
+
+Arming, disarming, mode changes and alerts are also added as markers
+automatically (`auto_markers`). The parameters are saved at the start and at the
+end when they have been loaded. The sidebar shows `● REC` from every screen.
+`:rec start|stop|finish|status` and `:mark [label:] note` work from anywhere.
+`q` asks before quitting a recording; quitting stops it cleanly (rosbag gets
+Ctrl-C and time to close the bag), and the recorders get a signal if lazypx4
+crashes. Inside tmux the run directory is also written to
+`~/.tmux-recording/<session>`, so `px4-record.sh`, `rosbag-record.sh` & co.
+write into the same run.
+
+### Session tlog and replay
 
 With `--tlog` (or `record_tlog = true` under `[link]` in the settings file)
 the session is recorded to `./px4_tlogs/*.tlog` (both directions, the

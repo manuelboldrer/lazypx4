@@ -97,6 +97,7 @@ impl App {
             ("kml", 1) => cmdline::complete_path(word, "."),
             ("diff", 1 | 2) => cmdline::complete_path(word, &self.settings.param_dir),
             ("replay", 1) => cmdline::prefix_matches(word, ["pause", "resume", "speed"]),
+            ("rec", 1) => cmdline::prefix_matches(word, ["start", "stop", "finish", "status"]),
             ("gimbal", 1) => cmdline::prefix_matches(word, GIMBAL_WORDS.iter().copied()),
             ("gimbal", 2) if words[1] == "roi" => cmdline::prefix_matches(word, ["none"]),
             ("gimbal", 2) if words[1] == "lock" => cmdline::prefix_matches(word, ["on", "off"]),
@@ -325,6 +326,12 @@ impl App {
                 };
                 state::lock(&self.shared).info(text);
             }
+            "rec" => {
+                if let Err(m) = self.rec_command(&args) {
+                    err(self, m);
+                }
+            }
+            "mark" if !args.is_empty() => self.rec_marker_text(&args),
             "diff" if !args_v.is_empty() && args_v.len() <= 2 => self.cmd_param_diff(args_v[0], args_v.get(1).copied()),
             "quit" => {
                 // Same guard as [q]: never quit out from under a transfer
@@ -335,7 +342,7 @@ impl App {
                 };
                 if busy {
                     err(self, "quit: a download / calibration / jog is active".into());
-                } else {
+                } else if !self.rec_guard_quit() {
                     self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }

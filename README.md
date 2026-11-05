@@ -28,7 +28,8 @@ and [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by
 - **Flight review** — open a `.ulg` and page through Flight Review plots (attitude, rates, vibration, spectra, failsafes, EKF...) right in the terminal
 - **Payload** — aim the gimbal, take photos / video, operate a gripper, winch or spare outputs
 - **Fleet view** — watch and command several drones side by side
-- **Recording & replay** — with `--tlog`, the session is saved and can be played back later
+- **Recording** — one pane (`e`) records the whole flight into one folder: MAVLink `.tlog`, every tmux pane, rosbag, screen, CPU / vehicle CSV, pings, your own commands, markers, and a manifest + summary at the end
+- **Replay** — with `--tlog`, the session is saved and can be played back later
 - **ROS 2 (optional)** — shows LiDAR scans and planned paths on the map
 
 Everything is a single keypress away, with vim-style navigation. Anything that
@@ -76,6 +77,7 @@ mavlink start -u 14560 -o 14560 -t <your-computer-ip> -m onboard -r 4000000
 | `p` | Parameters |
 | `l` | Flight logs |
 | `v` | Flight review: plot a `.ulg` |
+| `e` | Record: `R` start all, `S` stop, `F` finish, `1`–`9` markers |
 | `:` | Type a command (e.g. `:takeoff 5`) |
 | `?` | Help for the current screen |
 | `q` | Quit / go back |

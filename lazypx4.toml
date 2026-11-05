@@ -19,6 +19,41 @@
 # disk_path = "/"                   # filesystem shown on the dashboard HOST line
 # kml = "mission.kml"               # map overlay loaded at start-up
 
+[record]
+# The [e] RECORD pane. `R` starts every recorder set to true here.
+# dir = "~/logs"                    # runs: <dir>/<date>_<time>[_name]/
+# state_dir = "~/.tmux-recording"   # <state_dir>/<tmux session> = the active run dir
+# tlog = true                       # mavlink/telemetry.tlog, from this link
+# tmux = true                       # every pane of this tmux session
+# tmux_skip_windows = []
+# tmux_strip_ansi = false
+# rosbag = true
+# ros_setup = ""                    # sourced first, e.g. "~/ros2_ws/install/setup.bash"
+# rosbag_topics = []                # non-empty = only these (the excludes are ignored)
+# rosbag_exclude = [".*image_raw.*"] # DON'T RECORD CAMERAS - too much data can upset ROS
+# rosbag_args = []                  # e.g. ["-s", "mcap", "--max-bag-duration", "600"]
+# rosbag_stall_s = 30               # alert when the bag stops growing
+# system = true                     # system.csv: host + vehicle, 1 Hz
+# ping = []                         # e.g. ["drone=10.0.0.5", "gcs=10.0.0.2"]
+# screen = false                    # [V] toggles it either way
+# screen_window = ""                # follow a window by title, e.g. "QGroundControl"
+# screen_fps = 5
+# screen_cmd = ""                   # your own command; $OUT = file to write
+# auto_markers = true               # arm / disarm / mode changes / alerts
+# markers = ["takeoff", "mission start", "mission end", "landing", "anomaly", "good", "bad"]
+# disk_low_gb = 5.0
+#
+# Any command worth keeping: output to <run>/<name>.log; `alert` is a regex.
+# [[record.command]]
+# name = "kernel"
+# cmd = "dmesg -w --time-format iso"
+# alert = "(?i)usb disconnect|i/o error"
+#
+# [[record.command]]
+# name = "journal"
+# cmd = "journalctl -f -o short-precise"
+# enabled = false                   # listed, but not part of [R]
+
 [upload]
 # server = "https://v2.logs.px4.io" # Flight Review v2 server [u] uploads .ulg logs to
 

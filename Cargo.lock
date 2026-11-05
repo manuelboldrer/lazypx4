@@ -1011,6 +1011,7 @@ dependencies = [
  "num-traits",
  "r2r",
  "ratatui",
+ "regex",
  "roxmltree",
  "serde",
  "serde_json",

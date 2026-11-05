@@ -44,6 +44,7 @@ fn screen_keys(screen: Screen) -> (Keys, bool) {
             ("t", "NSH shell"),
             ("u", "USB / network"),
             ("f", "flash firmware"),
+            ("e", "record: tlog, tmux panes, rosbag, screen, markers"),
             ("y", "preflight go / no-go"),
         ],
         Screen::Map => &[
@@ -135,6 +136,19 @@ fn screen_keys(screen: Screen) -> (Keys, bool) {
         ],
         Screen::Firmware => &[("↑↓", "firmware file"), ("←→", "serial port"), ("ENTER", "flash"), ("r", "refresh"), ("f", "back")],
         Screen::Preflight => &[("y", "back")],
+        Screen::Record => &[
+            ("R", "record all: open a run (<dir>/<date>_<time>/), start every included recorder"),
+            ("S", "stop all"),
+            ("F", "finish: stop, parameters, manifest.json + summary.md, name the run"),
+            ("j k / ENTER", "select / start-stop one recorder"),
+            ("i / SPACE", "include / leave out a recorder from R"),
+            ("1-9 / M", "quick marker / marker with a note (label: note)"),
+            ("V", "start / stop the screen recording"),
+            ("p", "download the newest PX4 log into <run>/px4/"),
+            ("u / x", "upload it to Flight Review / cancel"),
+            ("E / Y", "rename the run / copy its path"),
+            ("e", "back"),
+        ],
         Screen::About => &[("← →", "alert sound: mute, ring, or a spoken language")],
     };
     (keys, matches!(screen, Screen::Dashboard | Screen::Map))

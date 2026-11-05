@@ -34,6 +34,7 @@ pub enum Screen {
     Payload,
     Calibration,
     Firmware,
+    Record,
     About,
 }
 
@@ -54,6 +55,7 @@ pub const NAV_ITEMS: &[(Screen, &str, Option<char>)] = &[
     (Screen::Payload, "PAYLOAD", Some('o')),
     (Screen::Calibration, "CALIBRATE", Some('s')),
     (Screen::Firmware, "FLASH FIRMWARE", Some('f')),
+    (Screen::Record, "RECORD", Some('e')),
     (Screen::About, "ABOUT", None),
 ];
 
@@ -73,6 +75,7 @@ impl Screen {
             Screen::Calibration => "PX4 SENSOR CALIBRATION",
             Screen::Shell => "PX4 MAVLINK SHELL · NSH",
             Screen::Host => "HOST · USB / NETWORK",
+            Screen::Record => "RECORD · TLOG · TMUX · ROSBAG · SCREEN · MARKERS",
             Screen::About => "ABOUT · LAZYPX4",
             Screen::Preflight => "PREFLIGHT · GO / NO-GO",
         }
@@ -83,7 +86,7 @@ impl Screen {
     pub fn scrolls_as_page(self) -> bool {
         !matches!(
             self,
-            Screen::ModeSelect | Screen::Parameters | Screen::Log | Screen::FlightLogs | Screen::Shell | Screen::Review
+            Screen::ModeSelect | Screen::Parameters | Screen::Log | Screen::FlightLogs | Screen::Shell | Screen::Review | Screen::Record
         )
     }
 
@@ -127,6 +130,8 @@ pub enum Action {
     Winch(crate::mav::payload::WinchAction),
     /// 0-based output, -1..1, and optionally (seconds, then).
     Actuator(usize, f32, Option<(f64, f32)>),
+    /// Quit while the REC pane is recording: stop it first.
+    QuitRecording,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +166,9 @@ pub enum InputKind {
     Actuator,
     /// A .ulg for the flight-review pane.
     ReviewLog,
+    /// [e] RECORD: a marker note / a name for the run.
+    RecMarker,
+    RecRename,
 }
 
 pub struct Confirm {
@@ -299,6 +307,9 @@ pub struct App {
     pub jobs: crate::jobs::Jobs,
     /// [v] flight-review pane: log list, loader and the loaded log.
     pub review: crate::app_review::ReviewState,
+    /// [e] RECORD pane: recorders and the open run.
+    pub rec: crate::record::Recording,
+    pub(crate) rec_jobs: crate::app_record::RecJobs,
     pub(crate) log_rx: Arc<Mutex<Receiver<flightlog::Chunk>>>,
     pub(crate) shutdown: Arc<AtomicBool>,
     ros_thread: Option<std::thread::JoinHandle<()>>,
@@ -432,6 +443,7 @@ impl App {
         let ros = crate::ros::new(&settings);
         let ros_thread = crate::ros::spawn(ros.clone(), shared.clone(), &settings, shutdown.clone());
 
+        let rec = crate::record::Recording::new(settings.record.clone(), settings.replay.is_some());
         let mut app = App {
             session: Session {
                 alert_audio: if settings.alert_bell { AlertAudio::Ring } else { AlertAudio::Mute },
@@ -446,6 +458,8 @@ impl App {
             net,
             jobs: Default::default(),
             review: Default::default(),
+            rec,
+            rec_jobs: Default::default(),
             log_rx: Arc::new(Mutex::new(log_rx)),
             shutdown,
             ros_thread,
@@ -495,6 +509,8 @@ impl App {
             }
         }
 
+        // Close the recording run cleanly (rosbag gets its SIGINT grace).
+        self.rec.shutdown(&self.link);
         // Hand the NSH console back to whatever PX4 had on it.
         if state::lock(&self.shared).shell_active {
             shell::release_shell(&self.link);
@@ -531,6 +547,7 @@ impl App {
         service_vehicle(&self.link, &mut st, &self.settings);
         drop(st);
         self.review_poll();
+        self.rec_tick();
         let mut st = state::lock(&self.shared);
         if self.session.screen == Screen::Payload {
             crate::mav::payload::poll_camera(&self.link, &mut st);
@@ -658,6 +675,8 @@ impl App {
                     InputKind::Winch => self.winch_submit(&input.buffer),
                     InputKind::Actuator => self.actuator_submit(&input.buffer),
                     InputKind::ReviewLog => self.review_open_path(&input.buffer),
+                    InputKind::RecMarker => self.rec_marker_text(&input.buffer),
+                    InputKind::RecRename => self.rec_rename(&input.buffer),
                     InputKind::ParamDiff => {
                         let files: Vec<String> = input.buffer.split_whitespace().map(str::to_string).collect();
                         if !files.is_empty() {
@@ -778,6 +797,10 @@ impl App {
     fn run_action(&mut self, action: Action) {
         let (link, shared) = (&self.link, &self.shared);
         match action {
+            Action::QuitRecording => {
+                self.rec_stop_all();
+                self.quit();
+            }
             Action::Arm => {
                 commands::send_arm(link, shared, true);
             }
@@ -1211,7 +1234,9 @@ impl App {
                 param_editing || st.dl_active || st.cal_active || self.session.jog_armed
             };
             if !busy {
-                self.quit();
+                if !self.rec_guard_quit() {
+                    self.quit();
+                }
                 return;
             }
         }
@@ -1233,6 +1258,7 @@ impl App {
             Screen::FlightLogs => self.handle_flight_log_key(&key),
             Screen::Review => self.handle_review_key(&key),
             Screen::Calibration => self.handle_calibration_key(&key),
+            Screen::Record => self.handle_record_key(&key),
             Screen::Dashboard => self.handle_dashboard_key(&key),
             screen => {
                 // Control, About and the not-yet-ported screens: own hotkey
@@ -1272,7 +1298,7 @@ impl App {
                 self.session.sidebar_focused = false;
                 self.open_screen(NAV_ITEMS[self.session.nav_index].0);
             }
-            "q" => self.quit(),
+            "q" if !self.rec_guard_quit() => self.quit(),
             _ => {}
         }
     }

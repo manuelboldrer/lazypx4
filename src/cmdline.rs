@@ -54,6 +54,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     cmd("ack", &[], "ack", "acknowledge the alert banner (same as [A])"),
     cmd("replay", &[], "replay pause|resume|speed X", "control a --replay"),
     cmd("tlog", &[], "tlog", "show where this session's .tlog is being written"),
+    cmd("rec", &["record"], "rec start|stop|finish|status", "the [e] RECORD pane: start / stop / finish the run"),
+    cmd("mark", &["marker"], "mark [label:] note", "drop a marker in the recording run"),
     cmd("diff", &[], "diff FILE [FILE2]", "parameter differences: FILE vs the vehicle, or FILE vs FILE2"),
     cmd("help", &["h"], "help [command]", "list the commands in the event log"),
     cmd("quit", &["q"], "quit", "quit lazypx4"),

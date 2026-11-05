@@ -235,6 +235,9 @@ fn pick<'a>(lang: &str, texts: [&'a str; 3]) -> &'a str {
 fn phrase(alert: &str, lang: &str) -> String {
     let upper = alert.to_uppercase();
     let has = |word: &str| upper.contains(word);
+    if upper.starts_with("REC:") {
+        return pick(lang, ["Problema di registrazione.", "Recording problem.", "Probleem met de opname."]).into();
+    }
     if has("HEARTBEAT TIMEOUT") {
         return pick(lang, ["Collegamento perso.", "Link lost.", "Verbinding verloren."]).into();
     }

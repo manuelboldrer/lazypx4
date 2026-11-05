@@ -33,12 +33,19 @@ pub struct Recorder {
     out: Option<BufWriter<File>>,
     failed: bool,
     last_flush: Instant,
+    /// Frames written so far.
+    pub frames: u64,
 }
 
 impl Recorder {
     pub fn new(dir: &str, port: u16) -> Self {
         let name = format!("lazypx4_{}_p{port}.tlog", chrono::Local::now().format("%Y%m%d_%H%M%S"));
-        Recorder { path: PathBuf::from(dir).join(name), out: None, failed: false, last_flush: Instant::now() }
+        Self::at(PathBuf::from(dir).join(name))
+    }
+
+    /// Record to exactly `path` (the REC pane's mavlink/telemetry.tlog).
+    pub fn at(path: PathBuf) -> Self {
+        Recorder { path, out: None, failed: false, last_flush: Instant::now(), frames: 0 }
     }
 
     pub fn path(&self) -> &std::path::Path {
@@ -73,6 +80,7 @@ impl Recorder {
                 return;
             }
             rest = &rest[n..];
+            self.frames += 1;
         }
         // A crash or power cut should lose at most about a second.
         if self.last_flush.elapsed().as_secs_f64() >= 1.0 {

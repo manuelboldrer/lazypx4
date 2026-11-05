@@ -7,6 +7,7 @@ mod app;
 mod app_cmd;
 mod app_map;
 mod app_payload;
+mod app_record;
 mod cmdline;
 mod config;
 mod fleet;
@@ -21,6 +22,7 @@ mod parammeta;
 mod picker;
 mod preflight;
 mod px4mode;
+mod record;
 mod ros;
 mod tlog;
 mod satellite;
@@ -228,6 +230,7 @@ fn main() -> std::process::ExitCode {
         key_params,
         keys: file.keys,
         aliases: file.aliases,
+        record: file.record,
         config_path,
     };
     if let Some(ports) = fleet_ports {

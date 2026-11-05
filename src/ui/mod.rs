@@ -14,6 +14,7 @@ pub mod map;
 mod other;
 mod payload;
 mod picker;
+mod record;
 mod review;
 
 use ratatui::Frame;
@@ -345,6 +346,10 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
         ),
         Screen::Calibration => (other::calibration(ctx), "[g]yro [a]ccel [l]evel [c]ompass [b]aro · [r] re-request · [s] back".into()),
         Screen::About => (other::about(ctx), "←→ alert sound · ESC panels".into()),
+        Screen::Record => (
+            record::draw(ctx),
+            "[R] record all · [S] stop · [F] finish · ENTER start/stop · [i] include · 1-9 / M marker · [V] screen · [p] PX4 log · [u] upload · [e] back".into(),
+        ),
         Screen::Preflight => (preflight::draw(ctx), "[y] back · ESC panels · ? keys".into()),
         Screen::Map => (map::draw(ctx), "j/k scroll · keys listed below the map · [n] back · ESC panels".into()),
         Screen::Host => (hostui::host(ctx), "[i] speed test · [u] back · ESC panels".into()),
@@ -356,7 +361,7 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
 }
 
 fn draw_sidebar(frame: &mut Frame, app: &App, st: &State, area: Rect) {
-    let [status_area, nav_area] = Layout::vertical([Constraint::Length(7), Constraint::Min(3)]).areas(area);
+    let [status_area, nav_area] = Layout::vertical([Constraint::Length(8), Constraint::Min(3)]).areas(area);
 
     // At-a-glance vehicle status, visible from every screen.
     let replay = app.link.with_player(|p| {
@@ -392,6 +397,14 @@ fn draw_sidebar(frame: &mut Frame, app: &App, st: &State, area: Rect) {
         Ln::new().raw(" ").bold(st.mode.clone()).line(),
         Ln::new().raw(" BAT ").spans(vec![battery]).line(),
         Ln::new().raw(" GPS ").fg(fix_name, fix_color).raw(format!(" {}", st.gps_sats)).line(),
+        match app.rec.run.as_ref() {
+            Some(run) if app.rec.recording() => Ln::new()
+                .raw(" ")
+                .st("● REC", Style::new().fg(RED).add_modifier(Modifier::BOLD))
+                .raw(format!(" {}", crate::record::hms(run.elapsed_s())))
+                .line(),
+            _ => Ln::new().raw(" ").dim("REC off [e]").line(),
+        },
     ];
     frame.render_widget(
         Paragraph::new(status).block(

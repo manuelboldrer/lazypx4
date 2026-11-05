@@ -33,6 +33,8 @@ pub struct Link {
     source: Source,
     /// Session .tlog (UDP only); both directions are recorded.
     recorder: Option<Mutex<Recorder>>,
+    /// The REC pane's .tlog, started / stopped with the recording run.
+    run_tlog: Mutex<Option<Recorder>>,
     peer: Mutex<Option<SocketAddr>>,
     sequence: AtomicU8,
     /// Locked vehicle identity (system, component), copied here so a sender
@@ -59,6 +61,7 @@ impl Link {
         Link {
             source,
             recorder,
+            run_tlog: Mutex::new(None),
             peer: Mutex::new(None),
             sequence: AtomicU8::new(0),
             target: Mutex::new((0, 0)),
@@ -88,6 +91,29 @@ impl Link {
         if let Some(r) = &self.recorder {
             r.lock().unwrap_or_else(|e| e.into_inner()).write(bytes);
         }
+        if let Some(r) = self.run_tlog.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            r.write(bytes);
+        }
+    }
+
+    /// Start writing every frame (both directions) to `path` as well;
+    /// false on a replay, where there is no live traffic to record.
+    pub fn start_run_tlog(&self, path: std::path::PathBuf) -> bool {
+        if self.is_replay() {
+            return false;
+        }
+        *self.run_tlog.lock().unwrap_or_else(|e| e.into_inner()) = Some(Recorder::at(path));
+        true
+    }
+
+    /// Close the REC tlog (flushed on drop).
+    pub fn stop_run_tlog(&self) {
+        self.run_tlog.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+
+    /// Frames in the REC tlog so far (None when it is not running).
+    pub fn run_tlog_frames(&self) -> Option<u64> {
+        self.run_tlog.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|r| r.frames)
     }
 
     pub fn set_target(&self, system: u8, component: u8) {

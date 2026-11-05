@@ -56,6 +56,8 @@ pub struct Settings {
     pub alert_sound: String,
     /// How many times the alert sound repeats.
     pub alert_repeat: u32,
+    /// The [e] RECORD pane's settings ([record]).
+    pub record: crate::record::RecordConfig,
     /// The lazypx4.toml that was loaded, if any.
     pub config_path: Option<String>,
 }
@@ -72,6 +74,8 @@ pub struct FileConfig {
     pub alerts: AlertsFile,
     pub fleet: FleetFile,
     pub upload: UploadFile,
+    /// The [e] RECORD pane.
+    pub record: crate::record::RecordConfig,
     /// heading -> parameter names, in file order.
     pub key_params: Option<toml::Table>,
     pub keys: std::collections::BTreeMap<String, String>,
