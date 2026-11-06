@@ -137,6 +137,11 @@ struct Cli {
     #[arg(long, value_name = "PORTS", num_args = 0..=1, default_missing_value = "")]
     fleet: Option<String>,
 
+    /// UAV namespace for the [e] RECORD run folder and file names, e.g. uav_1
+    /// [default: $UAV_NAME / $PX4_UXRCE_DDS_NS, else uav_<system id>]
+    #[arg(long, value_name = "NAME")]
+    namespace: Option<String>,
+
     /// Replay speed multiplier
     #[arg(long, default_value_t = 1.0, value_name = "X")]
     replay_speed: f64,
@@ -230,7 +235,7 @@ fn main() -> std::process::ExitCode {
         key_params,
         keys: file.keys,
         aliases: file.aliases,
-        record: file.record,
+        record: config::RecordConfig { namespace: cli.namespace.unwrap_or(file.record.namespace.clone()), ..file.record },
         config_path,
     };
     if let Some(ports) = fleet_ports {

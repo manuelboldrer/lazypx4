@@ -5,7 +5,8 @@
 //!
 //! Recorders:
 //! - mavlink tlog: lazypx4's own link, written by `Link` (no extra
-//!   mavlink-router endpoint needed), both directions
+//!   mavlink-router endpoint needed), both directions; one per vehicle in
+//!   fleet mode, each `mavlink/<namespace>.tlog`
 //! - tmux panes: scrollback + live output of every pane (`tmux pipe-pane`)
 //! - rosbag: `ros2 bag record -a` minus the excludes, alert when it stalls
 //! - system: host CPU / RAM / disk + vehicle state, one CSV row a second
@@ -40,6 +41,9 @@ const PING_ALERT_LOST: u32 = 5;
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecordConfig {
+    /// The UAV namespace (e.g. "uav_1") in the run folder and file names;
+    /// "" = $UAV_NAME / $PX4_UXRCE_DDS_NS, else uav_<system id>.
+    pub namespace: String,
     /// Runs go to `<dir>/<date>_<time>[_name]/`.
     pub dir: String,
     /// `<state_dir>/<tmux session>` holds the active run directory, so the
@@ -55,6 +59,9 @@ pub struct RecordConfig {
     /// Non-empty: record only these topics (the excludes are then ignored).
     pub rosbag_topics: Vec<String>,
     pub rosbag_exclude: Vec<String>,
+    /// Exact topic names left out of the bag (the RECORD pane's [t] topic
+    /// list toggles these; with `rosbag_topics` they are dropped from it).
+    pub rosbag_exclude_topics: Vec<String>,
     pub rosbag_args: Vec<String>,
     /// Alert when the bag has not grown for this long (0 = never).
     pub rosbag_stall_s: u64,
@@ -76,9 +83,53 @@ pub struct RecordConfig {
     pub command: Vec<CommandCfg>,
 }
 
+impl RecordConfig {
+    /// `-a` mode: the patterns plus the excluded topics, as one regex.
+    pub fn rosbag_exclude_regex(&self) -> Option<String> {
+        let parts: Vec<String> = self
+            .rosbag_exclude
+            .iter()
+            .cloned()
+            .chain(self.rosbag_exclude_topics.iter().map(|t| format!("^{}$", regex::escape(t))))
+            .collect();
+        (!parts.is_empty()).then(|| format!("({})", parts.join("|")))
+    }
+
+    /// `rosbag_topics` mode: the listed topics not excluded.
+    pub fn rosbag_topics_kept(&self) -> Vec<&String> {
+        self.rosbag_topics.iter().filter(|t| !self.rosbag_exclude_topics.contains(t)).collect()
+    }
+
+    /// Why `topic` is left out of the bag, if it is: `Some(None)` for an
+    /// exact exclude ([t] can undo it), `Some(Some(pattern))` for a
+    /// `rosbag_exclude` pattern or a topic not in `rosbag_topics`.
+    pub fn rosbag_excluded(&self, topic: &str) -> Option<Option<String>> {
+        if self.rosbag_exclude_topics.iter().any(|t| t == topic) {
+            return Some(None);
+        }
+        if !self.rosbag_topics.is_empty() {
+            return (!self.rosbag_topics.iter().any(|t| t == topic)).then(|| Some("not in rosbag_topics".into()));
+        }
+        self.rosbag_exclude
+            .iter()
+            .find(|p| regex::Regex::new(p).is_ok_and(|re| re.is_match(topic)))
+            .map(|p| Some(format!("pattern {p}")))
+    }
+
+    /// `ros2 topic list` with `ros_setup` sourced first.
+    pub fn topic_list_script(&self) -> String {
+        let mut script = String::new();
+        if !self.ros_setup.is_empty() {
+            script += &format!("source {} || exit 1; ", shell_quote(&expand_home(&self.ros_setup).display().to_string()));
+        }
+        script + "exec timeout 15 ros2 topic list"
+    }
+}
+
 impl Default for RecordConfig {
     fn default() -> Self {
         RecordConfig {
+            namespace: String::new(),
             dir: "~/logs".into(),
             state_dir: "~/.tmux-recording".into(),
             tlog: true,
@@ -89,6 +140,7 @@ impl Default for RecordConfig {
             ros_setup: String::new(),
             rosbag_topics: Vec::new(),
             rosbag_exclude: vec![".*image_raw.*".into()],
+            rosbag_exclude_topics: Vec::new(),
             rosbag_args: Vec::new(),
             rosbag_stall_s: 30,
             system: true,
@@ -297,7 +349,8 @@ fn tmux_start_pipe(session: &str, pane: &Pane, file: &Path, strip_ansi: bool) ->
 
 #[derive(Debug, Clone)]
 pub enum Kind {
-    Tlog,
+    /// Index into the vehicles handed to start / stop / poll.
+    Tlog(usize),
     Tmux,
     Rosbag,
     System,
@@ -336,9 +389,38 @@ pub enum Note {
     Alert(String),
 }
 
+/// One vehicle whose link can be recorded, and its namespace (`uav_1`)
+/// for file names.
+pub struct Veh<'a> {
+    /// The recorder index it belongs to (fleet slot; 0 in the full UI).
+    pub id: usize,
+    pub link: &'a crate::link::Link,
+    pub ns: String,
+}
+
+/// The namespace from the environment the tmux sessions set up
+/// (`UAV_NAME`, `PX4_UXRCE_DDS_NS`), if any.
+pub fn env_namespace() -> Option<String> {
+    ["UAV_NAME", "UAV_NAMESPACE", "PX4_UXRCE_DDS_NS"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok())
+        .map(|v| v.trim().trim_matches('/').to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// One vehicle's state, for the auto markers and the run's alert list.
+pub struct VehState {
+    pub ns: String,
+    pub armed: bool,
+    pub mode: String,
+    /// Unacknowledged alerts (count) and the newest one.
+    pub alerts: usize,
+    pub newest_alert: Option<String>,
+}
+
 /// What a poll needs from the rest of lazypx4.
 pub struct PollCtx<'a> {
-    pub link: &'a crate::link::Link,
+    pub vehicles: &'a [Veh<'a>],
     /// One CSV row for the system recorder (header, row).
     pub system_row: Option<(&'static str, String)>,
 }
@@ -427,11 +509,16 @@ impl Recorder {
 
     pub fn idle_detail(&self, cfg: &RecordConfig) -> String {
         match &self.kind {
-            Kind::Tlog => "mavlink/telemetry.tlog from this link, both directions".into(),
+            Kind::Tlog(_) => "mavlink/<namespace>.tlog from this link, both directions".into(),
             Kind::Tmux => "every pane: scrollback + live output".into(),
-            Kind::Rosbag if !cfg.rosbag_topics.is_empty() => format!("{} topics", cfg.rosbag_topics.len()),
-            Kind::Rosbag if !cfg.rosbag_exclude.is_empty() => format!("-a, excluding {}", cfg.rosbag_exclude.join(" ")),
-            Kind::Rosbag => "-a".into(),
+            Kind::Rosbag if !cfg.rosbag_topics.is_empty() => format!("{} topics · [t] topics", cfg.rosbag_topics_kept().len()),
+            Kind::Rosbag => {
+                let mut ex = cfg.rosbag_exclude.join(" ");
+                if !cfg.rosbag_exclude_topics.is_empty() {
+                    ex = format!("{ex} + {} topic(s)", cfg.rosbag_exclude_topics.len()).trim().to_string();
+                }
+                if ex.is_empty() { "-a · [t] topics".into() } else { format!("-a, excluding {ex} · [t] topics") }
+            }
             Kind::System => "system.csv: host + vehicle, 1 Hz".into(),
             Kind::Ping(host) => format!("net/ping_{}.log  {host}", sanitize(&self.name["ping ".len()..])),
             Kind::Screen if !cfg.screen_cmd.is_empty() => "custom command".into(),
@@ -445,7 +532,7 @@ impl Recorder {
     // start / stop
     // -----------------------------------------------------------------
 
-    fn start(&mut self, cfg: &RecordConfig, run: &Run, tmux_session: Option<&str>, link: &crate::link::Link, out: &mut Vec<Note>) {
+    fn start(&mut self, cfg: &RecordConfig, run: &Run, tmux_session: Option<&str>, vehicles: &[Veh], out: &mut Vec<Note>) {
         if self.active() || !self.available() {
             return;
         }
@@ -464,19 +551,26 @@ impl Recorder {
         self.ping_ok = 0;
         let dir = &run.dir;
         let result: Result<(), String> = match self.kind.clone() {
-            Kind::Tlog => {
-                let path = dir.join("mavlink/telemetry.tlog");
-                if link.start_run_tlog(path.clone()) {
-                    self.output = Some(path);
-                    Ok(())
-                } else {
-                    Err("not on a live link".into())
+            Kind::Tlog(i) => match vehicles.iter().find(|v| v.id == i) {
+                Some(v) => {
+                    let path = dir.join(format!("mavlink/{}.tlog", sanitize(&v.ns)));
+                    self.name = format!("tlog {}", v.ns);
+                    if v.link.start_run_tlog(path.clone()) {
+                        self.output = Some(path);
+                        Ok(())
+                    } else {
+                        Err("not on a live link".into())
+                    }
                 }
-            }
+                None => Err("vehicle not connected".into()),
+            },
             Kind::Tmux => self.start_tmux(cfg, dir, tmux_session, out),
             Kind::Rosbag => self.start_rosbag(cfg, dir),
             Kind::System => {
-                let path = dir.join("system.csv");
+                let path = dir.join(match &run.namespace {
+                    Some(ns) => format!("system_{}.csv", sanitize(ns)),
+                    None => "system.csv".into(),
+                });
                 let existed = path.exists();
                 append(&path).map_err(|e| e.to_string()).map(|f| {
                     self.writer = Some(BufWriter::new(f));
@@ -574,13 +668,17 @@ impl Recorder {
         let mut record = String::from("ros2 bag record");
         if cfg.rosbag_topics.is_empty() {
             record += " -a";
-            if !cfg.rosbag_exclude.is_empty() {
+            if let Some(re) = cfg.rosbag_exclude_regex() {
                 // Humble: --exclude, Jazzy+: --exclude-regex.
                 script += "X=--exclude; ros2 bag record --help 2>/dev/null | grep -q -- --exclude-regex && X=--exclude-regex; ";
-                record += &format!(" \"$X\" {}", shell_quote(&format!("({})", cfg.rosbag_exclude.join("|"))));
+                record += &format!(" \"$X\" {}", shell_quote(&re));
             }
         } else {
-            for t in &cfg.rosbag_topics {
+            let kept = cfg.rosbag_topics_kept();
+            if kept.is_empty() {
+                return Err("every topic in [record] rosbag_topics is excluded ([t])".into());
+            }
+            for t in kept {
                 record += &format!(" {}", shell_quote(t));
             }
         }
@@ -597,13 +695,15 @@ impl Recorder {
         r
     }
 
-    fn stop(&mut self, link: &crate::link::Link, out: &mut Vec<Note>) {
+    fn stop(&mut self, vehicles: &[Veh], out: &mut Vec<Note>) {
         if self.status != Status::Recording {
             return;
         }
         match &self.kind {
-            Kind::Tlog => {
-                link.stop_run_tlog();
+            Kind::Tlog(i) => {
+                if let Some(v) = vehicles.iter().find(|v| v.id == *i) {
+                    v.link.stop_run_tlog();
+                }
                 self.finish(Status::Done);
             }
             Kind::Tmux => {
@@ -692,8 +792,23 @@ impl Recorder {
         self.last_sample = Some((now, self.bytes));
 
         match self.kind.clone() {
-            Kind::Tlog => {
-                self.detail = match ctx.link.run_tlog_frames() {
+            Kind::Tlog(i) => {
+                // The namespace became known after the start (the vehicle
+                // connected later): rename the file to match.
+                if let (Some(v), Some(old)) = (ctx.vehicles.iter().find(|v| v.id == i), self.output.clone())
+                    && self.name != format!("tlog {}", v.ns)
+                {
+                    let new = old.with_file_name(format!("{}.tlog", sanitize(&v.ns)));
+                    if !new.exists() {
+                        let moved = if old.exists() { std::fs::rename(&old, &new).is_ok() } else { v.link.start_run_tlog(new.clone()) };
+                        if moved {
+                            out.push(Note::Info(format!("REC {} -> {}", self.name, tilde(&new))));
+                            self.name = format!("tlog {}", v.ns);
+                            self.output = Some(new);
+                        }
+                    }
+                }
+                self.detail = match ctx.vehicles.iter().find(|v| v.id == i).and_then(|v| v.link.run_tlog_frames()) {
                     Some(0) | None => "waiting for MAVLink traffic".into(),
                     Some(n) => format!("{n} frames"),
                 };
@@ -768,6 +883,15 @@ impl Recorder {
                 out.push(Note::Alert(format!("REC: {}: {line}", self.name)));
             }
         }
+    }
+
+    pub fn is_rosbag(&self) -> bool {
+        matches!(self.kind, Kind::Rosbag)
+    }
+
+    /// The topics a running / finished rosbag subscribed to.
+    pub fn bag_topics(&self) -> &[String] {
+        &self.topics
     }
 
     fn read_bag_log(&mut self) {
@@ -930,14 +1054,19 @@ pub struct Run {
     pub finished_wall: Option<DateTime<Local>>,
     pub markers: Vec<Marker>,
     pub alerts: Vec<(String, String)>,
-    /// (link, frames) of the Flight Review upload, once done.
+    /// The UAV namespace in the folder / file names (`uav_1`, `fleet`).
+    pub namespace: Option<String>,
+    /// The Flight Review link of the upload, once done.
     pub review_url: Option<String>,
 }
 
 impl Run {
-    fn create(base: &Path) -> std::io::Result<Run> {
+    fn create(base: &Path, namespace: Option<&str>) -> std::io::Result<Run> {
         let now = Local::now();
-        let stamp = now.format("%Y-%m-%d_%H-%M-%S").to_string();
+        let mut stamp = now.format("%Y-%m-%d_%H-%M-%S").to_string();
+        if let Some(ns) = namespace {
+            stamp = format!("{stamp}_{}", sanitize(ns));
+        }
         let mut dir = base.join(&stamp);
         let mut n = 2;
         while dir.exists() {
@@ -952,6 +1081,7 @@ impl Run {
             finished_wall: None,
             markers: Vec::new(),
             alerts: Vec::new(),
+            namespace: namespace.map(str::to_string),
             review_url: None,
         })
     }
@@ -1015,21 +1145,25 @@ pub struct Recording {
     pub cursor: usize,
     pub tmux_session: Option<String>,
     pub disk_free: Option<u64>,
+    /// Put into the next run's folder name / file names; set by the caller
+    /// before `record_all` (it knows the vehicle).
+    pub namespace: Option<String>,
     disk_warned: bool,
     last_poll: Instant,
     /// Vehicle state the auto markers compare against.
-    last_armed: Option<bool>,
-    last_mode: String,
-    last_alerts: usize,
+    last: std::collections::HashMap<String, (bool, String, usize)>,
 }
 
 impl Recording {
-    pub fn new(cfg: RecordConfig, replay: bool) -> Self {
+    /// `tlogs`: one label per vehicle link that can be recorded.
+    pub fn new(cfg: RecordConfig, tlogs: &[String], replay: bool) -> Self {
         let tmux_session = tmux_session();
         let ros = cfg.ros_setup.is_empty() && !which("ros2");
         let mut v = Vec::new();
-        let tlog = Recorder::new(Kind::Tlog, "mavlink tlog", cfg.tlog);
-        v.push(if replay { tlog.unavailable("replaying a .tlog") } else { tlog });
+        for (i, label) in tlogs.iter().enumerate() {
+            let tlog = Recorder::new(Kind::Tlog(i), format!("tlog {label}"), cfg.tlog);
+            v.push(if replay { tlog.unavailable("replaying a .tlog") } else { tlog });
+        }
         let tm = Recorder::new(Kind::Tmux, "tmux panes", cfg.tmux);
         v.push(if tmux_session.is_none() { tm.unavailable("not running inside tmux") } else { tm });
         let bag = Recorder::new(Kind::Rosbag, "rosbag", cfg.rosbag);
@@ -1078,11 +1212,10 @@ impl Recording {
             cursor: 0,
             tmux_session,
             disk_free,
+            namespace: None,
             disk_warned: false,
             last_poll: Instant::now(),
-            last_armed: None,
-            last_mode: String::new(),
-            last_alerts: 0,
+            last: Default::default(),
         }
     }
 
@@ -1099,7 +1232,7 @@ impl Recording {
         if self.run.as_ref().is_some_and(|r| r.finished_wall.is_none()) {
             return true;
         }
-        match Run::create(&expand_home(&self.cfg.dir)) {
+        match Run::create(&expand_home(&self.cfg.dir), self.namespace.as_deref()) {
             Ok(run) => {
                 out.push(Note::Info(format!("REC new run {}", tilde(&run.dir))));
                 self.run = Some(run);
@@ -1136,33 +1269,53 @@ impl Recording {
     }
 
     /// `R`: open a run and start every included recorder.
-    pub fn record_all(&mut self, link: &crate::link::Link, out: &mut Vec<Note>) {
+    pub fn record_all(&mut self, vehicles: &[Veh], out: &mut Vec<Note>) {
         if !self.ensure_run(out) {
             return;
         }
-        let which: Vec<usize> = (0..self.recorders.len()).filter(|&i| self.recorders[i].include).collect();
+        // A vehicle's tlog only when that vehicle is asked for (the fleet
+        // records the selected ones).
+        let which: Vec<usize> = (0..self.recorders.len())
+            .filter(|&i| self.recorders[i].include)
+            .filter(|&i| match self.recorders[i].kind {
+                Kind::Tlog(id) => vehicles.iter().any(|v| v.id == id),
+                _ => true,
+            })
+            .collect();
         if which.is_empty() {
             out.push(Note::Warn("REC: no recorder is included in [R] ([i] includes one)".into()));
         }
-        self.start(&which, link, out);
+        self.start(&which, vehicles, out);
     }
 
-    fn start(&mut self, which: &[usize], link: &crate::link::Link, out: &mut Vec<Note>) {
+    fn start(&mut self, which: &[usize], vehicles: &[Veh], out: &mut Vec<Note>) {
         let Some(run) = self.run.as_ref() else { return };
         for &i in which {
-            self.recorders[i].start(&self.cfg, run, self.tmux_session.as_deref(), link, out);
+            self.recorders[i].start(&self.cfg, run, self.tmux_session.as_deref(), vehicles, out);
         }
     }
 
     /// ENTER: start / stop the selected recorder.
-    pub fn toggle(&mut self, i: usize, link: &crate::link::Link, out: &mut Vec<Note>) {
+    pub fn toggle(&mut self, i: usize, vehicles: &[Veh], out: &mut Vec<Note>) {
         let Some(r) = self.recorders.get_mut(i) else { return };
         if let Status::Unavailable(why) = &r.status {
             out.push(Note::Warn(format!("REC {}: {why}", r.name)));
         } else if r.active() {
-            r.stop(link, out);
+            r.stop(vehicles, out);
         } else if self.ensure_run(out) {
-            self.start(&[i], link, out);
+            self.start(&[i], vehicles, out);
+        }
+    }
+
+    /// A vehicle's link was replaced (fleet ENTER and back): carry on
+    /// writing its tlog (appended) on the new one.
+    pub fn resume_tlog(&self, id: usize, link: &crate::link::Link) {
+        for r in &self.recorders {
+            if let (Kind::Tlog(i), Status::Recording, Some(path)) = (&r.kind, &r.status, &r.output)
+                && *i == id
+            {
+                link.start_run_tlog(path.clone());
+            }
         }
     }
 
@@ -1170,9 +1323,9 @@ impl Recording {
         self.recorders.iter().position(|r| matches!(r.kind, Kind::Screen))
     }
 
-    pub fn stop_all(&mut self, link: &crate::link::Link, out: &mut Vec<Note>) {
+    pub fn stop_all(&mut self, vehicles: &[Veh], out: &mut Vec<Note>) {
         for r in &mut self.recorders {
-            r.stop(link, out);
+            r.stop(vehicles, out);
         }
     }
 
@@ -1226,7 +1379,7 @@ impl Recording {
     }
 
     /// Once a second: recorder health, disk space, auto markers.
-    pub fn poll(&mut self, ctx: &PollCtx, vehicle: (bool, &str, usize, Option<&str>), out: &mut Vec<Note>) {
+    pub fn poll(&mut self, ctx: &PollCtx, vehicles: &[VehState], out: &mut Vec<Note>) {
         if self.last_poll.elapsed() < Duration::from_secs(1) {
             return;
         }
@@ -1246,34 +1399,32 @@ impl Recording {
             self.disk_warned = false;
         }
 
-        // Auto markers from the vehicle: arm / disarm, mode changes, alerts.
-        let (armed, mode, alerts, newest_alert) = vehicle;
+        // Auto markers from each vehicle: arm / disarm, mode changes, alerts.
         let open = self.run.as_ref().is_some_and(|r| r.finished_wall.is_none()) && self.recording();
-        if open && self.cfg.auto_markers {
-            if self.last_armed.is_some_and(|a| a != armed) {
-                self.add_marker(if armed { "armed" } else { "disarmed" }, "", out);
+        let many = vehicles.len() > 1;
+        for v in vehicles {
+            let who = if many { format!("{} ", v.ns) } else { String::new() };
+            let new_alert = v.newest_alert.as_deref().filter(|_| self.last.get(&v.ns).is_some_and(|l| v.alerts > l.2));
+            if open && self.cfg.auto_markers {
+                if let Some((armed, mode, _)) = self.last.get(&v.ns).cloned() {
+                    if armed != v.armed {
+                        self.add_marker(if v.armed { "armed" } else { "disarmed" }, who.trim(), out);
+                    }
+                    if !mode.is_empty() && !v.mode.is_empty() && mode != v.mode {
+                        self.add_marker("mode", &format!("{who}{mode} -> {}", v.mode), out);
+                    }
+                }
+                if let Some(text) = new_alert.filter(|t| !t.starts_with("REC:")) {
+                    self.add_marker("alert", &format!("{who}{text}"), out);
+                }
             }
-            if !self.last_mode.is_empty() && self.last_mode != mode && !mode.is_empty() {
-                let text = format!("{} -> {mode}", self.last_mode);
-                self.add_marker("mode", &text, out);
-            }
-            if alerts > self.last_alerts
-                && let Some(text) = newest_alert
-                && !text.starts_with("REC:")
+            if let (Some(run), Some(text)) = (self.run.as_mut(), new_alert)
+                && run.finished_wall.is_none()
             {
-                let text = text.to_string();
-                self.add_marker("alert", &text, out);
+                run.alerts.push((Local::now().format("%H:%M:%S").to_string(), format!("{who}{text}")));
             }
+            self.last.insert(v.ns.clone(), (v.armed, v.mode.clone(), v.alerts));
         }
-        if let (Some(run), Some(text)) = (self.run.as_mut(), newest_alert)
-            && alerts > self.last_alerts
-            && run.finished_wall.is_none()
-        {
-            run.alerts.push((Local::now().format("%H:%M:%S").to_string(), text.to_string()));
-        }
-        self.last_armed = Some(armed);
-        self.last_mode = mode.to_string();
-        self.last_alerts = alerts;
     }
 
     /// Stopping recorders still closing (rosbag, ...).
@@ -1297,6 +1448,7 @@ impl Recording {
         let manifest = serde_json::json!({
             "tool": format!("lazypx4 {}", env!("CARGO_PKG_VERSION")),
             "run": run.name(),
+            "namespace": run.namespace,
             "directory": run.dir.display().to_string(),
             "host": std::fs::read_to_string("/proc/sys/kernel/hostname").map(|s| s.trim().to_string()).unwrap_or_default(),
             "user": std::env::var("USER").unwrap_or_default(),
@@ -1360,12 +1512,12 @@ impl Recording {
 
     /// On quit: stop everything and give the children their grace to
     /// close (rosbag writes its metadata on SIGINT).
-    pub fn shutdown(&mut self, link: &crate::link::Link) {
+    pub fn shutdown(&mut self, vehicles: &[Veh]) {
         if !self.recording() {
             return;
         }
         let mut notes = Vec::new();
-        self.stop_all(link, &mut notes);
+        self.stop_all(vehicles, &mut notes);
         let deadline = Instant::now() + ROSBAG_STOP_GRACE + CHILD_STOP_GRACE;
         while self.stopping() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
@@ -1404,7 +1556,8 @@ mod tests {
     #[test]
     fn markers_go_to_csv_and_notes() {
         let base = std::env::temp_dir().join(format!("lazypx4_rec_test_{}", std::process::id()));
-        let mut run = Run::create(&base).unwrap();
+        let mut run = Run::create(&base, Some("uav_1")).unwrap();
+        assert!(run.name().ends_with("_uav_1"));
         run.add_marker("takeoff", "first \"try\"").unwrap();
         let csv = std::fs::read_to_string(run.dir.join("markers.csv")).unwrap();
         assert!(csv.lines().nth(1).unwrap().ends_with("\"takeoff\",\"first \"\"try\"\"\""));

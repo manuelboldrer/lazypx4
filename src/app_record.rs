@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::app::{Action, App, InputKind, Screen};
 use crate::mav::flightlog;
-use crate::record::{Note, PollCtx, hms, tilde};
+use crate::record::{Note, PollCtx, Veh, hms, tilde};
 use crate::state;
 
 const SYSTEM_HEADER: &str = "time,unix_s,cpu_pct,load1,mem_pct,mem_used_gb,disk_free_gb,\
@@ -25,9 +25,79 @@ pub struct RecJobs {
     /// `F` ran while recorders were still closing: rewrite the manifest
     /// once they are done.
     pub finish_pending: bool,
+    /// `t`: the rosbag topic list, open in place of the markers.
+    pub topics: Option<TopicView>,
+}
+
+/// `t` in RECORD: every topic `ros2 topic list` (and the bag) knows, each
+/// recorded or left out; SPACE toggles an exact exclude.
+pub struct TopicView {
+    pub topics: Vec<String>,
+    pub cursor: usize,
+    /// `ros2 topic list` still running.
+    pub loading: bool,
+    pub error: String,
+    rx: Option<std::sync::mpsc::Receiver<Result<Vec<String>, String>>>,
+}
+
+impl TopicView {
+    fn fetch(script: String) -> std::sync::mpsc::Receiver<Result<Vec<String>, String>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new().name("RosTopics".into()).spawn(move || {
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&script)
+                .stdin(std::process::Stdio::null())
+                .output();
+            let _ = tx.send(match out {
+                Ok(o) if o.status.success() => {
+                    Ok(String::from_utf8_lossy(&o.stdout).lines().map(str::trim).filter(|l| l.starts_with('/')).map(String::from).collect())
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    let line = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+                    Err(if line.is_empty() { format!("ros2 topic list failed ({})", o.status) } else { line })
+                }
+                Err(e) => Err(format!("could not run ros2 topic list: {e}")),
+            });
+        });
+        rx
+    }
+
+    fn merge(&mut self, more: impl IntoIterator<Item = String>) {
+        let current = self.topics.get(self.cursor).cloned();
+        for t in more {
+            if !self.topics.contains(&t) {
+                self.topics.push(t);
+            }
+        }
+        self.topics.sort();
+        if let Some(c) = current {
+            self.cursor = self.topics.iter().position(|t| *t == c).unwrap_or(0);
+        }
+    }
 }
 
 impl App {
+    /// This vehicle's namespace: `[record] namespace` / `--namespace`, else
+    /// `UAV_NAME` / `PX4_UXRCE_DDS_NS`, else `uav_<system id>` once one
+    /// is heard.
+    pub(crate) fn rec_namespace(&self) -> Option<String> {
+        let configured = self.rec.cfg.namespace.trim().trim_matches('/');
+        if !configured.is_empty() {
+            return Some(configured.to_string());
+        }
+        crate::record::env_namespace().or_else(|| {
+            let sys = state::lock(&self.shared).target_system;
+            (sys != 0).then(|| format!("uav_{sys}"))
+        })
+    }
+
+    /// The namespace the tlog file is named after.
+    pub(crate) fn rec_tlog_ns(&self) -> String {
+        self.rec_namespace().unwrap_or_else(|| format!("port_{}", self.settings.port))
+    }
+
     pub(crate) fn rec_notes(&self, notes: Vec<Note>) {
         if notes.is_empty() {
             return;
@@ -73,14 +143,99 @@ impl App {
             (row, st.armed, st.mode.clone(), st.alerts.len(), st.alerts.last().map(|(_, t)| t.clone()))
         };
         let mut notes = Vec::new();
-        let ctx = PollCtx { link: &self.link, system_row: Some((SYSTEM_HEADER, row)) };
-        self.rec.poll(&ctx, (armed, &mode, alerts, newest.as_deref()), &mut notes);
+        let vehicles = [Veh { id: 0, link: &self.link, ns: self.rec_tlog_ns() }];
+        let ctx = PollCtx { vehicles: &vehicles, system_row: Some((SYSTEM_HEADER, row)) };
+        let states = [crate::record::VehState { ns: self.rec_tlog_ns(), armed, mode, alerts, newest_alert: newest }];
+        self.rec.poll(&ctx, &states, &mut notes);
         self.rec_notes(notes);
         if self.rec_jobs.finish_pending && !self.rec.stopping() {
             self.rec_jobs.finish_pending = false;
             self.rec_write_manifest(false);
         }
         self.rec_poll_jobs();
+        self.rec_poll_topics();
+    }
+
+    /// The topics the bag or the config already name, so the list is not
+    /// empty while `ros2 topic list` runs (or when ROS is not up).
+    fn rec_known_topics(&self) -> Vec<String> {
+        let bag = self.rec.recorders.iter().flat_map(|r| r.bag_topics().iter().cloned());
+        bag.chain(self.rec.cfg.rosbag_topics.iter().cloned()).chain(self.rec.cfg.rosbag_exclude_topics.iter().cloned()).collect()
+    }
+
+    fn rec_open_topics(&mut self) {
+        let mut view = TopicView { topics: Vec::new(), cursor: 0, loading: true, error: String::new(), rx: None };
+        view.merge(self.rec_known_topics());
+        view.rx = Some(TopicView::fetch(self.rec.cfg.topic_list_script()));
+        self.rec_jobs.topics = Some(view);
+    }
+
+    fn rec_poll_topics(&mut self) {
+        let Some(view) = self.rec_jobs.topics.as_mut() else { return };
+        let Some(rx) = view.rx.as_ref() else { return };
+        match rx.try_recv() {
+            Ok(result) => {
+                view.rx = None;
+                view.loading = false;
+                match result {
+                    Ok(topics) => view.merge(topics),
+                    Err(e) => view.error = e,
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                view.rx = None;
+                view.loading = false;
+            }
+        }
+    }
+
+    /// Keys while the topic list is open.
+    fn handle_topic_key(&mut self, key: &str) {
+        let Some(view) = self.rec_jobs.topics.as_mut() else { return };
+        let n = view.topics.len();
+        match key {
+            "t" | "ESC" => self.rec_jobs.topics = None,
+            "UP" => view.cursor = view.cursor.saturating_sub(1),
+            "DOWN" => view.cursor = (view.cursor + 1).min(n.saturating_sub(1)),
+            "PGUP" => view.cursor = view.cursor.saturating_sub(10),
+            "PGDN" => view.cursor = (view.cursor + 10).min(n.saturating_sub(1)),
+            "HOME" => view.cursor = 0,
+            "END" => view.cursor = n.saturating_sub(1),
+            "r" if !view.loading => {
+                view.loading = true;
+                view.error.clear();
+                view.rx = Some(TopicView::fetch(self.rec.cfg.topic_list_script()));
+            }
+            " " | "ENTER" | "i" => {
+                let Some(topic) = view.topics.get(view.cursor).cloned() else { return };
+                let cfg = &mut self.rec.cfg;
+                let text = match cfg.rosbag_excluded(&topic) {
+                    Some(Some(why)) => format!("REC: {topic} is left out by [record] ({why}) - edit lazypx4.toml to record it"),
+                    Some(None) => {
+                        cfg.rosbag_exclude_topics.retain(|t| *t != topic);
+                        format!("REC: rosbag records {topic}")
+                    }
+                    None => {
+                        cfg.rosbag_exclude_topics.push(topic.clone());
+                        format!("REC: rosbag leaves out {topic}")
+                    }
+                };
+                let restart = self.rec_rosbag_running();
+                let more = if restart { " (from the next rosbag start - ENTER on rosbag twice restarts it)" } else { "" };
+                state::lock(&self.shared).info(format!("{text}{more}"));
+            }
+            "a" => {
+                let n = self.rec.cfg.rosbag_exclude_topics.len();
+                self.rec.cfg.rosbag_exclude_topics.clear();
+                state::lock(&self.shared).info(format!("REC: {n} topic exclude(s) cleared"));
+            }
+            _ => {}
+        }
+    }
+
+    fn rec_rosbag_running(&self) -> bool {
+        self.rec.recorders.iter().any(|r| r.active() && r.is_rosbag())
     }
 
     /// `p` / `u` follow-ups.
@@ -141,7 +296,9 @@ impl App {
     pub(crate) fn rec_record_all(&mut self) {
         let mut notes = Vec::new();
         let new = self.rec.run.as_ref().is_none_or(|r| r.finished_wall.is_some());
-        self.rec.record_all(&self.link, &mut notes);
+        self.rec.namespace = self.rec_namespace();
+        let vehicles = [Veh { id: 0, link: &self.link, ns: self.rec_tlog_ns() }];
+        self.rec.record_all(&vehicles, &mut notes);
         self.rec_notes(notes);
         if new && self.rec.run.is_some() {
             self.rec_save_params("params_start.txt");
@@ -150,7 +307,8 @@ impl App {
 
     pub(crate) fn rec_stop_all(&mut self) {
         let mut notes = Vec::new();
-        self.rec.stop_all(&self.link, &mut notes);
+        let vehicles = [Veh { id: 0, link: &self.link, ns: self.rec_tlog_ns() }];
+        self.rec.stop_all(&vehicles, &mut notes);
         self.rec_notes(notes);
     }
 
@@ -196,6 +354,7 @@ impl App {
     /// The vehicle's parameters as they are now (QGC .params), when loaded.
     fn rec_save_params(&self, name: &str) {
         let Some(dir) = self.rec.run.as_ref().map(|r| r.dir.join("px4")) else { return };
+        let name = format!("{}_{name}", crate::record::sanitize(&self.rec_namespace().unwrap_or_else(|| "px4".into())));
         let st = state::lock(&self.shared);
         if st.parameters.is_empty() {
             return;
@@ -287,8 +446,13 @@ impl App {
     }
 
     pub(crate) fn handle_record_key(&mut self, key: &str) {
+        if self.rec_jobs.topics.is_some() {
+            self.handle_topic_key(key);
+            return;
+        }
         let n = self.rec.recorders.len();
         match key {
+            "t" => self.rec_open_topics(),
             "e" => self.session.screen = Screen::Dashboard,
             "ESC" => self.focus_sidebar(),
             "UP" => self.rec.cursor = self.rec.cursor.saturating_sub(1),
@@ -301,7 +465,9 @@ impl App {
             "ENTER" => {
                 let mut notes = Vec::new();
                 let new = self.rec.run.as_ref().is_none_or(|r| r.finished_wall.is_some());
-                self.rec.toggle(self.rec.cursor, &self.link, &mut notes);
+                self.rec.namespace = self.rec_namespace();
+                let vehicles = [Veh { id: 0, link: &self.link, ns: self.rec_tlog_ns() }];
+                self.rec.toggle(self.rec.cursor, &vehicles, &mut notes);
                 self.rec_notes(notes);
                 if new && self.rec.run.is_some() {
                     self.rec_save_params("params_start.txt");
@@ -315,7 +481,9 @@ impl App {
             "V" => match self.rec.screen_index() {
                 Some(i) => {
                     let mut notes = Vec::new();
-                    self.rec.toggle(i, &self.link, &mut notes);
+                    self.rec.namespace = self.rec_namespace();
+                    let vehicles = [Veh { id: 0, link: &self.link, ns: self.rec_tlog_ns() }];
+                    self.rec.toggle(i, &vehicles, &mut notes);
                     self.rec_notes(notes);
                 }
                 None => state::lock(&self.shared).warn("REC: no screen recorder"),
@@ -370,7 +538,8 @@ impl App {
             "start" => self.rec_record_all(),
             "stop" => self.rec_stop_all(),
             "finish" => self.rec_finish(),
-            _ => return Err("usage: :rec start|stop|finish|status".into()),
+            a if a.starts_with("name ") => self.rec_rename(&a["name ".len()..]),
+            _ => return Err("usage: :rec start|stop|finish|status|name SUFFIX".into()),
         }
         Ok(())
     }

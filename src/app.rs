@@ -443,7 +443,7 @@ impl App {
         let ros = crate::ros::new(&settings);
         let ros_thread = crate::ros::spawn(ros.clone(), shared.clone(), &settings, shutdown.clone());
 
-        let rec = crate::record::Recording::new(settings.record.clone(), settings.replay.is_some());
+        let rec = crate::record::Recording::new(settings.record.clone(), &["mavlink".to_string()], settings.replay.is_some());
         let mut app = App {
             session: Session {
                 alert_audio: if settings.alert_bell { AlertAudio::Ring } else { AlertAudio::Mute },
@@ -510,7 +510,8 @@ impl App {
         }
 
         // Close the recording run cleanly (rosbag gets its SIGINT grace).
-        self.rec.shutdown(&self.link);
+        let vehicles = [crate::record::Veh { id: 0, link: &self.link, ns: self.rec_tlog_ns() }];
+        self.rec.shutdown(&vehicles);
         // Hand the NSH console back to whatever PX4 had on it.
         if state::lock(&self.shared).shell_active {
             shell::release_shell(&self.link);

@@ -160,15 +160,18 @@ Logs load in the background, telemetry keeps flowing.
 
 ### Record (`e`)
 
-lazyrec in a single pane. `R` opens a run, `<dir>/<date>_<time>/` (default
-`~/logs`), and starts every recorder marked `[x]`:
+lazyrec in a single pane. `R` opens a run, `<dir>/<date>_<time>_<namespace>/`
+(default `~/logs`), and starts every recorder marked `[x]`. The namespace is
+the UAV's (`uav_1`): `--namespace`, else `[record] namespace`, else
+`$UAV_NAME` / `$PX4_UXRCE_DDS_NS`, else `uav_<system id>`. It also names
+the tlog, `system_<namespace>.csv` and the saved parameters.
 
 | Recorder | Output | |
 |---|---|---|
-| mavlink tlog | `mavlink/telemetry.tlog` | written from lazypx4's own link, both directions; no extra mavlink-router endpoint needed |
+| mavlink tlog | `mavlink/<namespace>.tlog` | written from lazypx4's own link, both directions; no extra mavlink-router endpoint needed |
 | tmux panes | `tmux/window-N_<name>_pane-M.txt` | scrollback + live output of every pane (lazypx4's own pane is skipped); panes opened mid-run are picked up too |
-| rosbag | `rosbag/bag/` | `ros2 bag record -a` minus `rosbag_exclude`; alert if the bag stops growing |
-| system | `system.csv` | host CPU / RAM / disk + vehicle link, arm state, mode, battery, altitude, position, GPS, once a second |
+| rosbag | `rosbag/bag/` | `ros2 bag record -a` minus `rosbag_exclude` and `rosbag_exclude_topics` (pick them with `t`); alert if the bag stops growing |
+| system | `system_<namespace>.csv` | host CPU / RAM / disk + vehicle link, arm state, mode, battery, altitude, position, GPS, once a second |
 | ping | `net/ping_<name>.log` | one per `ping` entry; alert after 5 lost replies in a row |
 | screen | `screen/screen_<time>.mkv` | wf-recorder (sway / wlroots) or ffmpeg x11grab; `V` toggles it |
 | your own | `<name>.log` | each `[[record.command]]`; optional alert regex |
@@ -176,16 +179,17 @@ lazyrec in a single pane. `R` opens a run, `<dir>/<date>_<time>/` (default
 | Key | |
 |-----|--|
 | `R` / `S` | Record all (new run if none is open) / stop all |
-| `F` | Finish: stop, `px4/params_end.txt`, `manifest.json` + `summary.md`, then name the run (`<run>_<name>`) |
+| `F` | Finish: stop, `px4/<namespace>_params_end.txt`, `manifest.json` + `summary.md`, then name the run (`<run>_<name>`) |
 | `j` `k` / `ENTER` / `i` | Select / start-stop one recorder / include it in `R` |
 | `1`–`9` / `M` | Quick marker (`[record] markers`) / marker with a note (`label: note`) -> `markers.csv`, `notes.md` |
 | `p` / `u` | Download the newest PX4 log into `<run>/px4/` / upload it to Flight Review (link saved to `flight_review_link.txt`) |
 | `E` / `Y` | Rename the run / copy its path |
+| `t` | Rosbag topics: every topic `ros2 topic list` shows, `[x]` recorded, `[ ]` left out, `[-]` left out by a `rosbag_exclude` pattern. `SPACE` toggles one, `a` clears the excludes, `r` re-lists, `t` / `ESC` back. Applies from the next rosbag start (ENTER twice on rosbag restarts it); put them in `rosbag_exclude_topics` to keep them |
 
 Arming, disarming, mode changes and alerts are also added as markers
 automatically (`auto_markers`). The parameters are saved at the start and at the
 end when they have been loaded. The sidebar shows `● REC` from every screen.
-`:rec start|stop|finish|status` and `:mark [label:] note` work from anywhere.
+`:rec start|stop|finish|status|name X` and `:mark [label:] note` work from anywhere.
 `q` asks before quitting a recording; quitting stops it cleanly (rosbag gets
 Ctrl-C and time to close the bag), and the recorders get a signal if lazypx4
 crashes. Inside tmux the run directory is also written to
@@ -219,7 +223,12 @@ heartbeats to every vehicle the whole time.
 | `i` / `I` | Satellite snapshot framing every vehicle, drawn under the map (saved to `--map-dir`) / hide-show it |
 | `m` / `F` / `H` / `E` / `b` | Mode (`posctl`, `hold`, `mission`, ...) / offboard toggle / set home / EKF reset / reboot |
 | `g` / `x` | Goto (same syntax as the map) / keyboard jog on the targets. Relative goto and jog move each vehicle in its own body frame; a global goto `g lat lon alt` to several moves them as a formation (the group's centre goes there, each keeps its offset, altitude included); local `l` is single-vehicle only (each has its own origin) |
-| `ENTER` | Full lazypx4 on that vehicle; `q` there returns to the fleet |
+| `:kml FILE` | Load a `.kml` or QGC `.plan`: drawn on the map, and copied to every vehicle for the commands below (`--kml` does the same at start-up) |
+| `:fence upload` / `:mission upload` | Upload its fence polygons / the `.plan`'s mission to the targets |
+| `:wp <n>\|seq\|rand N [heading]` / `:cover SPACING [ANGLE] [heading]` / `:wp stop` | Fly its waypoints / a lawnmower over its first polygon - one vehicle at a time (several would share the same points); `:wp stop` stops the targets' queues |
+| `e` | Record the selected vehicles (`SPACE` / `v` marks, else the row): one run `<dir>/<date>_<time>_<namespaces>/` (e.g. `..._uav_1_uav_2/`) with `mavlink/uav_<sys>.tlog` per selected vehicle (renamed once a vehicle that connects later is identified) plus tmux, rosbag, system, ping, screen, commands. `e` again while the run is open adds the newly selected vehicles to it. `:rec stop` / `:rec finish` end it (manifest + summary), `:rec name X` renames, quitting stops it cleanly |
+| `1`–`9` / `M` | Recording markers (auto markers per vehicle: `uav_1 armed`, mode changes, alerts) |
+| `ENTER` | Full lazypx4 on that vehicle (the loaded KML goes with it; its tlog carries on when you come back); `q` there returns to the fleet |
 | `A` / `q` | Acknowledge alerts / quit |
 
 ## Parameters

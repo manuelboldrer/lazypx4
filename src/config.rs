@@ -135,6 +135,8 @@ pub struct AlertsFile {
     pub repeat: Option<u32>,
 }
 
+pub use crate::record::RecordConfig;
+
 pub const DEFAULT_ALERT_REPEAT: u32 = 5;
 
 /// KEY PARAMETERS panel columns of (heading, parameter names).

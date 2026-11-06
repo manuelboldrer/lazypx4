@@ -466,78 +466,24 @@ impl App {
         true
     }
 
-    fn split_face(text: &str) -> (Vec<String>, bool) {
-        let mut tokens: Vec<String> = text.split_whitespace().map(str::to_string).collect();
-        let face = tokens.last().is_some_and(|t| FACE_WORDS.contains(&t.to_lowercase().as_str()));
-        if face {
-            tokens.pop();
-        }
-        (tokens, face)
-    }
-
-    fn confirm_queue(&mut self, label: &str, mode: &str, targets: Vec<Target>, face_target: bool, summary: String) {
-        let prompt = format!(
-            "{label} [{mode}]  {} target(s) at the current altitude{}: {summary}. Type YES",
-            targets.len(),
-            if face_target { ", facing each target" } else { "" }
-        );
-        self.request_confirmation(prompt, Action::StartQueue { targets, mode: mode.into(), face_target });
+    fn confirm_queue(&mut self, plan: QueuePlan) {
+        let prompt = plan.prompt();
+        self.request_confirmation(prompt, Action::StartQueue { targets: plan.targets, mode: plan.mode, face_target: plan.face });
     }
 
     pub(crate) fn wp_queue_submit(&mut self, text: &str) {
-        let (tokens, face) = Self::split_face(text);
         let waypoints = state::lock(&self.shared).kml.as_ref().map(|k| k.waypoints.clone()).unwrap_or_default();
-        let err = |app: &Self, m: String| state::lock(&app.shared).error(m);
-        let Some(first) = tokens.first().map(|t| t.to_lowercase()) else {
-            return err(self, "Waypoint queue: expected a waypoint number, 'seq', or 'rand <N>'".into());
-        };
-        let result = match first.as_str() {
-            "seq" | "sequence" | "all" => guided::build_targets(&waypoints, "sequence", None, None).map(|t| ("sequence", t)),
-            "rand" | "random" => match tokens.get(1).and_then(|n| n.parse::<usize>().ok()) {
-                Some(n) => guided::build_targets(&waypoints, "random", None, Some(n)).map(|t| ("random", t)),
-                None => return err(self, "Waypoint queue: 'rand' needs a count, e.g. rand 5".into()),
-            },
-            n => match n.parse::<usize>() {
-                Ok(i) => guided::build_targets(&waypoints, "single", Some(i), None).map(|t| ("single", t)),
-                Err(_) => return err(self, "Waypoint queue: expected a waypoint number, 'seq', or 'rand <N>'".into()),
-            },
-        };
-        match result {
-            Ok((mode, targets)) => {
-                let mut names: Vec<&str> = targets.iter().take(5).map(|t| t.name.as_str()).collect();
-                let more = targets.len().saturating_sub(5);
-                let more_text = format!("... (+{more} more)");
-                if more > 0 {
-                    names.push(&more_text);
-                }
-                let summary = names.join(", ");
-                self.confirm_queue("WAYPOINT QUEUE", mode, targets, face, summary);
-            }
-            Err(e) => err(self, format!("Waypoint queue: {e}")),
+        match plan_wp_queue(text, &waypoints) {
+            Ok(plan) => self.confirm_queue(plan),
+            Err(e) => state::lock(&self.shared).error(e),
         }
     }
 
     pub(crate) fn coverage_submit(&mut self, text: &str) {
-        let (tokens, face) = Self::split_face(text);
         let ring = state::lock(&self.shared).kml.as_ref().and_then(|k| k.fence_rings.first().cloned()).unwrap_or_default();
-        let spacing = tokens.first().and_then(|t| t.parse::<f64>().ok());
-        let angle = tokens.get(1).map(|t| t.parse::<f64>());
-        let (Some(spacing), None | Some(Ok(_))) = (spacing, &angle) else {
-            return state::lock(&self.shared).error("Coverage: expected a spacing in metres, e.g. 5 (optional angle: 5 90)");
-        };
-        let angle = angle.and_then(Result::ok);
-        match geo::coverage_path(&ring, spacing, angle, 1.0) {
-            Ok(path) => {
-                let n = path.len();
-                let targets: Vec<Target> = path
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (lat, lon))| Target { lat, lon, name: format!("cover {}/{n}", i + 1) })
-                    .collect();
-                let length: f64 = targets.windows(2).map(|w| geo::distance_m(w[0].lat, w[0].lon, w[1].lat, w[1].lon)).sum();
-                self.confirm_queue("AREA COVERAGE", "coverage", targets, face, format!("{spacing} m lines, {length:.0} m of sweep"));
-            }
-            Err(e) => state::lock(&self.shared).error(format!("Coverage: {e}")),
+        match plan_coverage(text, &ring) {
+            Ok(plan) => self.confirm_queue(plan),
+            Err(e) => state::lock(&self.shared).error(e),
         }
     }
 
@@ -672,4 +618,82 @@ impl App {
             crate::jobs::start_ecl_ekf_check(&self.jobs, &self.shared, tools, path);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Waypoint queue / coverage lines (shared with the fleet view)
+// ---------------------------------------------------------------------------
+
+/// What a `wp` / `cover` line asks for, ready to confirm.
+pub(crate) struct QueuePlan {
+    pub label: &'static str,
+    pub mode: String,
+    pub targets: Vec<Target>,
+    pub face: bool,
+    pub summary: String,
+}
+
+impl QueuePlan {
+    pub(crate) fn prompt(&self) -> String {
+        format!(
+            "{} [{}]  {} target(s) at the current altitude{}: {}. Type YES",
+            self.label,
+            self.mode,
+            self.targets.len(),
+            if self.face { ", facing each target" } else { "" },
+            self.summary
+        )
+    }
+}
+
+/// A trailing "heading" / "face" word: yaw toward each target.
+fn split_face(text: &str) -> (Vec<String>, bool) {
+    let mut tokens: Vec<String> = text.split_whitespace().map(str::to_string).collect();
+    let face = tokens.last().is_some_and(|t| FACE_WORDS.contains(&t.to_lowercase().as_str()));
+    if face {
+        tokens.pop();
+    }
+    (tokens, face)
+}
+
+/// `<n>` / `seq` / `rand N` [heading] over the KML waypoints.
+pub(crate) fn plan_wp_queue(text: &str, waypoints: &[geo::Waypoint]) -> Result<QueuePlan, String> {
+    let (tokens, face) = split_face(text);
+    let usage = || "Waypoint queue: expected a waypoint number, 'seq', or 'rand <N>'".to_string();
+    let first = tokens.first().map(|t| t.to_lowercase()).ok_or_else(usage)?;
+    let (mode, targets) = match first.as_str() {
+        "seq" | "sequence" | "all" => ("sequence", guided::build_targets(waypoints, "sequence", None, None)),
+        "rand" | "random" => match tokens.get(1).and_then(|n| n.parse::<usize>().ok()) {
+            Some(n) => ("random", guided::build_targets(waypoints, "random", None, Some(n))),
+            None => return Err("Waypoint queue: 'rand' needs a count, e.g. rand 5".into()),
+        },
+        n => match n.parse::<usize>() {
+            Ok(i) => ("single", guided::build_targets(waypoints, "single", Some(i), None)),
+            Err(_) => return Err(usage()),
+        },
+    };
+    let targets = targets.map_err(|e| format!("Waypoint queue: {e}"))?;
+    let mut names: Vec<String> = targets.iter().take(5).map(|t| t.name.clone()).collect();
+    let more = targets.len().saturating_sub(5);
+    if more > 0 {
+        names.push(format!("... (+{more} more)"));
+    }
+    Ok(QueuePlan { label: "WAYPOINT QUEUE", mode: mode.into(), targets, face, summary: names.join(", ") })
+}
+
+/// `SPACING [ANGLE]` [heading]: lawnmower over the first KML polygon.
+pub(crate) fn plan_coverage(text: &str, ring: &[(f64, f64)]) -> Result<QueuePlan, String> {
+    let (tokens, face) = split_face(text);
+    let spacing = tokens.first().and_then(|t| t.parse::<f64>().ok());
+    let angle = tokens.get(1).map(|t| t.parse::<f64>());
+    let (Some(spacing), None | Some(Ok(_))) = (spacing, &angle) else {
+        return Err("Coverage: expected a spacing in metres, e.g. 5 (optional angle: 5 90)".into());
+    };
+    let angle = angle.and_then(Result::ok);
+    let path = geo::coverage_path(ring, spacing, angle, 1.0).map_err(|e| format!("Coverage: {e}"))?;
+    let n = path.len();
+    let targets: Vec<Target> =
+        path.into_iter().enumerate().map(|(i, (lat, lon))| Target { lat, lon, name: format!("cover {}/{n}", i + 1) }).collect();
+    let length: f64 = targets.windows(2).map(|w| geo::distance_m(w[0].lat, w[0].lon, w[1].lat, w[1].lon)).sum();
+    Ok(QueuePlan { label: "AREA COVERAGE", mode: "coverage".into(), targets, face, summary: format!("{spacing} m lines, {length:.0} m of sweep") })
 }

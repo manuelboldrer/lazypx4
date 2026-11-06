@@ -62,7 +62,7 @@ impl Recorder {
             return;
         }
         if self.out.is_none() {
-            let opened = self.path.parent().map(std::fs::create_dir_all).unwrap_or(Ok(())).and_then(|_| File::create(&self.path));
+            let opened = self.path.parent().map(std::fs::create_dir_all).unwrap_or(Ok(())).and_then(|_| std::fs::OpenOptions::new().create(true).append(true).open(&self.path));
             match opened {
                 Ok(f) => self.out = Some(BufWriter::new(f)),
                 Err(_) => {

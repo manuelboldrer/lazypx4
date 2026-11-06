@@ -75,7 +75,7 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     lines.push(blank());
 
     // Recorders.
-    lines.push(section("RECORDERS", "j/k select · ENTER start/stop · i include in [R] · V screen"));
+    lines.push(section("RECORDERS", "j/k select · ENTER start/stop · i include in [R] · V screen · t rosbag topics"));
     let name_w = rec.recorders.iter().map(|r| r.name.chars().count()).max().unwrap_or(10).clamp(10, 20);
     for (i, r) in rec.recorders.iter().enumerate() {
         let selected = i == rec.cursor;
@@ -120,6 +120,11 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     }
     lines.push(blank());
 
+    if let Some(view) = app.rec_jobs.topics.as_ref() {
+        draw_topics(ctx, view, &mut lines);
+        return lines;
+    }
+
     // Markers.
     let quick: Vec<String> = rec.cfg.markers.iter().take(9).enumerate().map(|(i, m)| format!("{} {m}", i + 1)).collect();
     lines.push(section("MARKERS", &clip(&format!("{} · M note{}", quick.join(" · "), if rec.cfg.auto_markers { " · auto: arm, mode, alerts" } else { "" }), width.saturating_sub(16))));
@@ -160,4 +165,51 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     lines.push(section("FINISH", "[F] stop + parameters + manifest.json + summary.md + name · [E] rename · [Y] copy path"));
     lines.push(job.line());
     lines
+}
+
+/// `t`: the rosbag topic list in place of the markers / finish sections.
+fn draw_topics(ctx: &Ctx, view: &crate::app_record::TopicView, lines: &mut Vec<Line<'static>>) {
+    let rec = &ctx.app.rec;
+    let width = ctx.width;
+    let in_bag: Vec<&String> = rec.recorders.iter().filter(|r| r.is_rosbag()).flat_map(|r| r.bag_topics()).collect();
+    let excluded = view.topics.iter().filter(|t| rec.cfg.rosbag_excluded(t).is_some()).count();
+    let title = format!("ROSBAG TOPICS {}/{} recorded", view.topics.len() - excluded, view.topics.len());
+    lines.push(section(&title, "j/k · SPACE record / leave out · a clear excludes · r refresh · t/ESC back"));
+    if view.loading {
+        lines.push(Ln::new().raw("   ").fg("ros2 topic list...", YELLOW).line());
+    } else if !view.error.is_empty() {
+        lines.push(Ln::new().raw("   ").fg(clip(&view.error, width.saturating_sub(4)), RED).line());
+    }
+    if view.topics.is_empty() {
+        if !view.loading {
+            lines.push(dim_line("no topics (is ROS up? [record] ros_setup)"));
+        }
+        return;
+    }
+    let rows = ctx.height.saturating_sub(lines.len() + 2).max(3);
+    let start = view.cursor.saturating_sub(rows / 2).min(view.topics.len().saturating_sub(rows));
+    let name_w = view.topics.iter().map(|t| t.chars().count()).max().unwrap_or(10).min(width.saturating_sub(30).max(10));
+    for (i, topic) in view.topics.iter().enumerate().skip(start).take(rows) {
+        let selected = i == view.cursor;
+        let pointer = if selected { "▸" } else { " " };
+        let (mark, why) = match rec.cfg.rosbag_excluded(topic) {
+            None => (Ln::new().fg("[x]", GREEN), String::new()),
+            Some(None) => (Ln::new().fg("[ ]", RED), "left out".to_string()),
+            Some(Some(why)) => (Ln::new().dim("[-]"), why),
+        };
+        let live = if in_bag.contains(&topic) { "● in the bag" } else { "" };
+        let style = if selected { Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED) } else { Style::new() };
+        lines.push(
+            Ln::new()
+                .fg(format!(" {pointer} "), GREEN)
+                .spans(mark.0)
+                .raw(" ")
+                .st(format!("{:<name_w$}", clip(topic, name_w)), style)
+                .raw("  ")
+                .fg(live, RED)
+                .raw(" ")
+                .dim(why)
+                .line(),
+        );
+    }
 }

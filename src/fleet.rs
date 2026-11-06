@@ -98,7 +98,13 @@ fn start_unit(port: u16, settings: &Settings) -> std::io::Result<Unit> {
             }
         })?
     };
-    Ok(Unit { link, shared, stop, threads: vec![receiver, service], _log_rx: log_rx })
+    let queue = {
+        let (link, shared, stop) = (link.clone(), shared.clone(), stop.clone());
+        std::thread::Builder::new()
+            .name(format!("FleetWp{port}"))
+            .spawn(move || crate::mav::guided::wp_queue_thread(link, shared, stop))?
+    };
+    Ok(Unit { link, shared, stop, threads: vec![receiver, service, queue], _log_rx: log_rx })
 }
 
 fn stop_unit(unit: Unit) {
@@ -164,6 +170,11 @@ enum Command {
     /// Several vehicles to one global point: the group's centre goes
     /// there and each keeps its offset from it (lat, lon, amsl, yaw).
     Formation(f64, f64, f64, Option<f64>),
+    /// The loaded KML / .plan's fence polygons / mission items.
+    UploadFence,
+    UploadMission,
+    /// Fly a waypoint queue / coverage path (one vehicle).
+    Queue { targets: Vec<crate::state::Target>, mode: String, face: bool },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -171,6 +182,8 @@ enum InputKind {
     Takeoff,
     Goto,
     Mode,
+    /// A recording marker note.
+    Marker,
 }
 
 enum Prompt {
@@ -231,6 +244,15 @@ fn execute(unit: &Unit, command: &Command) {
         }
         // Handled by the fleet (it owns the jog state).
         Command::Jog => {}
+        Command::UploadFence => {
+            crate::mav::guided::start_fence_upload(link, &mut state::lock(shared));
+        }
+        Command::UploadMission => {
+            crate::mav::mission::start_mission_upload(link, &mut state::lock(shared));
+        }
+        Command::Queue { targets, mode, face } => {
+            crate::mav::guided::start_wp_queue(link, shared, targets.clone(), mode, *face);
+        }
         Command::Mode(query) => {
             let options = modes::mode_options(&state::lock(shared));
             let labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
@@ -243,9 +265,12 @@ fn execute(unit: &Unit, command: &Command) {
 }
 
 /// The `:` commands the fleet view runs itself.
-const FLEET_COMMANDS: &str = "arm disarm takeoff [alt] land rtl hold kill mode NAME goto ... offboard sethome ekfreset reboot ack";
-const FLEET_COMMAND_NAMES: &[&str] =
-    &["arm", "disarm", "takeoff", "land", "rtl", "hold", "kill", "mode", "goto", "offboard", "sethome", "ekfreset", "reboot", "ack", "help"];
+const FLEET_COMMANDS: &str = "arm disarm takeoff [alt] land rtl hold kill mode NAME goto ... offboard sethome ekfreset reboot ack · \
+kml FILE · fence upload · mission upload · wp <n>|seq|rand N|stop · cover SPACING · rec start|stop|finish|name X · mark NOTE";
+const FLEET_COMMAND_NAMES: &[&str] = &[
+    "arm", "disarm", "takeoff", "land", "rtl", "hold", "kill", "mode", "goto", "offboard", "sethome", "ekfreset", "reboot", "ack",
+    "kml", "fence", "mission", "wp", "cover", "rec", "mark", "help",
+];
 
 /// "GO" / "GO 3w" / "NO-GO 2f" and its colour: the PREFLIGHT column and
 /// the arm confirmation.
@@ -294,8 +319,14 @@ struct Fleet<'a> {
     map_zoom: f64,
     sat: Arc<Mutex<FleetSat>>,
     sat_hidden: bool,
-    /// The start-up KML / .plan overlay (`settings.kml_path`), if it loaded.
+    /// The KML / .plan overlay (`settings.kml_path` or `:kml`), if loaded;
+    /// copied into every vehicle's state for the uploads and queues.
     kml: Option<crate::geo::Kml>,
+    plan: Option<crate::geo::Plan>,
+    kml_path: Option<String>,
+    /// Record all: one run, a tlog per vehicle plus the host recorders.
+    rec: crate::record::Recording,
+    rec_finish_pending: bool,
     /// Companion-computer stats - one host, shared by every row's preflight.
     sys: Arc<Mutex<crate::host::SystemStats>>,
 }
@@ -534,6 +565,21 @@ impl Fleet<'_> {
                 }
                 return;
             }
+            "kml" if !args.is_empty() => return self.set_overlay(&args),
+            "fence" if args.trim() == "upload" => return self.overlay_command(Command::UploadFence, targets),
+            "mission" if args.trim() == "upload" => return self.overlay_command(Command::UploadMission, targets),
+            "wp" if args.trim() == "stop" => {
+                for &i in &targets {
+                    if let Some(u) = &self.slots[i].unit {
+                        crate::mav::guided::cancel_wp_queue(&mut state::lock(&u.shared), "stopped from the fleet view");
+                    }
+                }
+                self.note = format!("waypoint queue stopped on {}", self.names(&targets));
+                return;
+            }
+            "wp" | "cover" if !args.is_empty() => return self.queue_command(spec.name, &args, targets),
+            "rec" => return self.rec_command(&args),
+            "mark" if !args.is_empty() => return self.rec_marker_text(&args),
             "help" => {
                 self.note = FLEET_COMMANDS.into();
                 return;
@@ -562,6 +608,7 @@ impl Fleet<'_> {
                 }
                 self.confirm(&format!("Set mode {} on", text.trim()), Command::Mode(text.trim().to_string()), targets);
             }
+            InputKind::Marker => self.rec_marker_text(&text),
             InputKind::Goto => match parse_goto(&text) {
                 Ok(Goto::Target(_, GotoTarget::Local(..))) if targets.len() > 1 => {
                     self.note = "goto: every vehicle has its own local origin - use relative (r) or global (g) for several".into();
@@ -699,6 +746,10 @@ impl Fleet<'_> {
                     crate::cmdline::prefix_matches(word, labels.iter().map(String::as_str))
                 }
                 Some("offboard") => crate::cmdline::prefix_matches(word, ["on", "off"]),
+                Some("kml") => crate::cmdline::complete_path(word, "."),
+                Some("fence" | "mission") => crate::cmdline::prefix_matches(word, ["upload"]),
+                Some("wp") => crate::cmdline::prefix_matches(word, ["seq", "rand", "stop"]),
+                Some("rec") => crate::cmdline::prefix_matches(word, ["start", "stop", "finish", "status", "name"]),
                 Some("help") => crate::cmdline::prefix_matches(word, FLEET_COMMAND_NAMES.iter().copied()),
                 _ => Vec::new(),
             },
@@ -787,6 +838,255 @@ impl Fleet<'_> {
         }
     }
 
+    // -----------------------------------------------------------------
+    // KML / .plan: overlay, uploads, waypoint queues
+    // -----------------------------------------------------------------
+
+    /// `:kml FILE` (and `--kml`): the map overlay, and what the fence /
+    /// mission uploads and queues use on every vehicle.
+    fn set_overlay(&mut self, path: &str) {
+        let path = expand_path(path);
+        match load_overlay(&path) {
+            Ok((kml, plan)) => {
+                let items = plan.as_ref().map(|p| format!(", {} mission item(s)", p.items.len())).unwrap_or_default();
+                self.note = format!("{path}: {} waypoint(s), {} fence ring(s){items}", kml.waypoints.len(), kml.fence_rings.len());
+                self.kml = Some(kml);
+                self.plan = plan;
+                self.kml_path = Some(path);
+                for u in self.slots.iter().filter_map(|s| s.unit.as_ref()) {
+                    self.push_overlay(u);
+                }
+            }
+            Err(e) => self.note = format!("{path}: {e}"),
+        }
+    }
+
+    /// Copy the overlay into a vehicle's state (a restarted unit starts empty).
+    fn push_overlay(&self, unit: &Unit) {
+        let Some(kml) = &self.kml else { return };
+        let mut st = state::lock(&unit.shared);
+        st.kml = Some(kml.clone());
+        st.plan = self.plan.clone();
+        st.kml_path = self.kml_path.clone().unwrap_or_default();
+        st.kml_error.clear();
+    }
+
+    fn overlay_command(&mut self, command: Command, targets: Vec<usize>) {
+        let Some(kml) = &self.kml else {
+            self.note = "no KML / .plan loaded - :kml FILE first".into();
+            return;
+        };
+        let what = match command {
+            Command::UploadFence if kml.fence_rings.is_empty() => {
+                self.note = "the loaded file has no fence polygon".into();
+                return;
+            }
+            Command::UploadFence => format!("Upload the GEOFENCE ({} polygon(s)) to", kml.fence_rings.len()),
+            _ => match &self.plan {
+                Some(p) => format!("Upload the MISSION ({} item(s)) to", p.items.len()),
+                None => {
+                    self.note = "mission upload needs a QGC .plan (:kml FILE.plan)".into();
+                    return;
+                }
+            },
+        };
+        self.confirm(&what, command, targets);
+    }
+
+    /// `:wp` / `:cover`: one vehicle at a time - several would fly the very
+    /// same points.
+    fn queue_command(&mut self, which: &str, args: &str, targets: Vec<usize>) {
+        let Some(kml) = &self.kml else {
+            self.note = "no KML / .plan loaded - :kml FILE first".into();
+            return;
+        };
+        if targets.len() != 1 {
+            self.note = format!(":{which} flies one vehicle at a time (they would share the same points) - select one, no marks");
+            return;
+        }
+        let plan = if which == "wp" {
+            crate::app_map::plan_wp_queue(args, &kml.waypoints)
+        } else {
+            crate::app_map::plan_coverage(args, kml.fence_rings.first().map(Vec::as_slice).unwrap_or(&[]))
+        };
+        match plan {
+            Ok(p) => {
+                let text = format!("{} - {}", self.names(&targets), p.prompt());
+                let command = Command::Queue { targets: p.targets, mode: p.mode, face: p.face };
+                self.prompt = Some(Prompt::Confirm { text, buffer: String::new(), command, targets });
+            }
+            Err(e) => self.note = e,
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Record all
+    // -----------------------------------------------------------------
+
+    /// Every live vehicle with its namespace (`uav_<sys>`, else the port).
+    fn rec_vehicles(slots: &[Slot]) -> Vec<crate::record::Veh<'_>> {
+        slots
+            .iter()
+            .enumerate()
+            .filter_map(|(id, s)| {
+                let u = s.unit.as_ref()?;
+                let sys = state::lock(&u.shared).target_system;
+                let ns = if sys != 0 { format!("uav_{sys}") } else { format!("port_{}", s.port) };
+                Some(crate::record::Veh { id, link: &u.link, ns })
+            })
+            .collect()
+    }
+
+    fn rec_notes(&mut self, notes: Vec<crate::record::Note>) {
+        for n in notes {
+            match n {
+                crate::record::Note::Info(t) | crate::record::Note::Warn(t) => self.note = t,
+                crate::record::Note::Alert(t) => {
+                    if self.settings.alert_bell {
+                        crate::host::ring_alert(&self.settings.alert_sound, 1, Vec::new());
+                    }
+                    self.note = format!("⚠ {t}");
+                }
+            }
+        }
+    }
+
+    fn rec_tick(&mut self) {
+        let row = {
+            let sys = crate::host::lock(&self.sys);
+            let now = chrono::Local::now();
+            format!(
+                "{},{:.3},{:.1},{:.2},{:.1},{:.2},{:.1}",
+                now.format("%Y-%m-%d %H:%M:%S%.3f"),
+                now.timestamp_millis() as f64 / 1000.0,
+                sys.cpu_percent,
+                sys.load1,
+                sys.mem_percent,
+                sys.mem_used_gb,
+                sys.disk_free_gb
+            )
+        };
+        let mut notes = Vec::new();
+        {
+            let vehicles = Self::rec_vehicles(&self.slots);
+            let states: Vec<crate::record::VehState> = vehicles
+                .iter()
+                .map(|v| {
+                    let st = state::lock(&self.slots[v.id].unit.as_ref().unwrap().shared);
+                    crate::record::VehState {
+                        ns: v.ns.clone(),
+                        armed: st.armed,
+                        mode: st.mode.clone(),
+                        alerts: st.alerts.len(),
+                        newest_alert: st.alerts.last().map(|(_, t)| t.clone()),
+                    }
+                })
+                .collect();
+            let header = "time,unix_s,cpu_pct,load1,mem_pct,mem_used_gb,disk_free_gb";
+            let ctx = crate::record::PollCtx { vehicles: &vehicles, system_row: Some((header, row)) };
+            self.rec.poll(&ctx, &states, &mut notes);
+        }
+        self.rec_notes(notes);
+        if self.rec_finish_pending && !self.rec.stopping() {
+            self.rec_finish_pending = false;
+            self.rec_write_manifest();
+        }
+    }
+
+    fn rec_write_manifest(&mut self) -> Option<std::path::PathBuf> {
+        let vehicles: Vec<serde_json::Value> = self
+            .slots
+            .iter()
+            .filter_map(|s| {
+                let st = state::lock(&s.unit.as_ref()?.shared);
+                Some(serde_json::json!({
+                    "port": s.port,
+                    "system_id": st.target_system,
+                    "namespace": (st.target_system != 0).then(|| format!("uav_{}", st.target_system)),
+                    "firmware": st.fw_version_text,
+                    "mode_at_end": st.mode,
+                }))
+            })
+            .collect();
+        self.rec.write_manifest(serde_json::json!({ "fleet": vehicles }))
+    }
+
+    fn rec_command(&mut self, args: &str) {
+        let mut notes = Vec::new();
+        let (word, rest) = args.trim().split_once(' ').unwrap_or((args.trim(), ""));
+        match word {
+            "start" => {
+                // The selected vehicles (marked with SPACE / v, else the
+                // row): a new run named after their namespaces, or they
+                // join the run already open.
+                let targets = self.targets();
+                if targets.is_empty() {
+                    self.note = "REC: no live vehicle selected".into();
+                    return;
+                }
+                let vehicles: Vec<_> = Self::rec_vehicles(&self.slots).into_iter().filter(|v| targets.contains(&v.id)).collect();
+                let open = self.rec.run.as_ref().is_some_and(|r| r.finished_wall.is_none());
+                if !open {
+                    let names: Vec<&str> = vehicles.iter().map(|v| v.ns.as_str()).collect();
+                    self.rec.namespace = Some(names.join("_"));
+                }
+                self.rec.record_all(&vehicles, &mut notes);
+                drop(vehicles);
+                if open {
+                    notes.push(crate::record::Note::Info(format!("REC: recording {} too", self.names(&targets))));
+                }
+            }
+            "stop" | "finish" => {
+                let vehicles = Self::rec_vehicles(&self.slots);
+                self.rec.stop_all(&vehicles, &mut notes);
+                drop(vehicles);
+                if word == "finish" {
+                    self.rec_notes(std::mem::take(&mut notes));
+                    let written = self.rec_write_manifest();
+                    self.rec_finish_pending = self.rec.stopping();
+                    if let Some(p) = written {
+                        notes.push(crate::record::Note::Info(format!(
+                            "REC finished: {} (:rec name X renames it)",
+                            crate::record::tilde(p.parent().unwrap_or(&p))
+                        )));
+                    }
+                }
+            }
+            "name" if !rest.trim().is_empty() => {
+                self.rec.rename(rest, &mut notes);
+                if self.rec.run.as_ref().is_some_and(|r| r.finished_wall.is_some()) {
+                    self.rec_write_manifest();
+                }
+            }
+            "" | "status" => {
+                self.note = match self.rec.run.as_ref() {
+                    Some(r) if self.rec.recording() => format!("REC {} - {}", crate::record::hms(r.elapsed_s()), crate::record::tilde(&r.dir)),
+                    Some(r) => format!("not recording - last run {}", crate::record::tilde(&r.dir)),
+                    None => "not recording ([e] records the selected vehicles, or :rec start)".into(),
+                };
+            }
+            _ => self.note = "usage: :rec start|stop|finish|status|name SUFFIX".into(),
+        }
+        self.rec_notes(notes);
+    }
+
+    fn rec_marker(&mut self, label: &str, text: &str) {
+        let mut notes = Vec::new();
+        self.rec.add_marker(label, text, &mut notes);
+        self.rec_notes(notes);
+    }
+
+    fn rec_marker_text(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        match text.split_once(':') {
+            Some((l, t)) if !l.trim().is_empty() && !l.contains(' ') => self.rec_marker(l.trim(), t.trim()),
+            _ => self.rec_marker("note", text),
+        }
+    }
+
     /// Free the port, run the full UI on it, then serve it again.
     fn open(&mut self, terminal: &mut DefaultTerminal, config: Option<&str>) -> std::io::Result<()> {
         let i = self.selected();
@@ -801,7 +1101,7 @@ impl Fleet<'_> {
         if let Some(c) = config {
             command.arg("--config").arg(c);
         }
-        if let Some(k) = &self.settings.kml_path {
+        if let Some(k) = self.kml_path.as_ref().or(self.settings.kml_path.as_ref()) {
             command.arg("--kml").arg(k);
         }
         let status = crate::suspend::run_foreground(terminal, command, "", false, || {})?;
@@ -812,21 +1112,29 @@ impl Fleet<'_> {
         };
         self.slots[i].opened = false;
         self.slots[i].start(self.settings);
+        if let Some(u) = &self.slots[i].unit {
+            self.push_overlay(u);
+            self.rec.resume_tlog(i, &u.link);
+        }
         Ok(())
     }
 }
 
 /// The start-up overlay as the full UI's [o] reads it: a .kml, or a QGC
 /// .plan's waypoints + inclusion fences.
-fn load_overlay(path: &str) -> Result<crate::geo::Kml, String> {
-    let path = match path.trim().strip_prefix("~/") {
+fn load_overlay(path: &str) -> Result<(crate::geo::Kml, Option<crate::geo::Plan>), String> {
+    let path = expand_path(path);
+    if path.to_lowercase().ends_with(".plan") {
+        crate::geo::parse_plan(&path).map(|p| (p.overlay.clone(), Some(p)))
+    } else {
+        crate::geo::parse_kml(&path).map(|k| (k, None))
+    }
+}
+
+fn expand_path(path: &str) -> String {
+    match path.trim().strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
         None => path.trim().to_string(),
-    };
-    if path.to_lowercase().ends_with(".plan") {
-        crate::geo::parse_plan(&path).map(|p| p.overlay)
-    } else {
-        crate::geo::parse_kml(&path)
     }
 }
 
@@ -846,17 +1154,16 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
         sat: Arc::default(),
         sat_hidden: false,
         kml: None,
+        plan: None,
+        kml_path: None,
+        rec: crate::record::Recording::new(
+            settings.record.clone(),
+            &ports.iter().map(|p| format!("port {p}")).collect::<Vec<_>>(),
+            false,
+        ),
+        rec_finish_pending: false,
         sys: Arc::new(Mutex::new(crate::host::SystemStats::default())),
     };
-    if let Some(path) = &settings.kml_path {
-        match load_overlay(path) {
-            Ok(kml) => {
-                fleet.note = format!("overlay {path}: {} waypoint(s), {} fence ring(s)", kml.waypoints.len(), kml.fence_rings.len());
-                fleet.kml = Some(kml);
-            }
-            Err(e) => fleet.note = format!("overlay {path} failed: {e}"),
-        }
-    }
     let sysmon_stop = Arc::new(AtomicBool::new(false));
     {
         let (sys, disk, sd) = (fleet.sys.clone(), settings.disk_path.clone(), sysmon_stop.clone());
@@ -864,6 +1171,9 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
     }
     for slot in &mut fleet.slots {
         slot.start(settings);
+    }
+    if let Some(path) = &settings.kml_path {
+        fleet.set_overlay(path);
     }
 
     loop {
@@ -877,6 +1187,7 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
             crate::host::ring_alert(&settings.alert_sound, settings.alert_repeat, Vec::new());
         }
         fleet.request_preflight_params();
+        fleet.rec_tick();
         terminal.draw(|f| draw(f, &mut fleet))?;
         crate::kitty::flush();
 
@@ -932,11 +1243,26 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
             KeyCode::Char('+' | '=') => fleet.map_zoom = (fleet.map_zoom * 1.5).min(500.0),
             KeyCode::Char('-') => fleet.map_zoom = (fleet.map_zoom / 1.5).max(0.05),
             KeyCode::Char('0') => fleet.map_zoom = 1.0,
+            KeyCode::Char('e') => fleet.rec_command("start"),
+            KeyCode::Char('M') => {
+                fleet.prompt = Some(Prompt::Input { kind: InputKind::Marker, text: String::new(), targets: Vec::new() });
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let label = fleet.rec.cfg.markers.get(c as usize - '1' as usize).cloned();
+                match label {
+                    Some(l) => fleet.rec_marker(&l, ""),
+                    None => fleet.note = format!("no quick marker {c} ([record] markers)"),
+                }
+            }
             KeyCode::Char(c) => fleet.command_key(c),
             _ => {}
         }
     }
     sysmon_stop.store(true, Ordering::Relaxed);
+    if fleet.rec.recording() {
+        let vehicles = Fleet::rec_vehicles(&fleet.slots);
+        fleet.rec.shutdown(&vehicles);
+    }
     for slot in fleet.slots {
         if let Some(u) = slot.unit {
             stop_unit(u);
@@ -1183,6 +1509,10 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
     if alerts > 0 {
         title.push_str(&format!("· {alerts} ALERT(S) "));
     }
+    if let Some(run) = fleet.rec.run.as_ref().filter(|_| fleet.rec.recording()) {
+        let n = fleet.rec.recorders.iter().filter(|r| r.active()).count();
+        title.push_str(&format!("· ● REC {} {} ({n} recorders, {} markers) ", crate::record::hms(run.elapsed_s()), crate::record::tilde(&run.dir), run.markers.len()));
+    }
     let widget = Table::new(rows, widths)
         .header(header)
         .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
@@ -1246,7 +1576,11 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
         }
     }
 
-    let mut bar = match &fleet.jog {
+    let mut bar = Vec::new();
+    if !fleet.note.is_empty() {
+        bar.push(Span::styled(format!(" {}  ", fleet.note), Style::new().fg(YELLOW)));
+    }
+    bar.extend(match &fleet.jog {
         Some(j) => vec![Span::styled(
             format!(
                 " JOG {} · step {:.2} m · w/s up/down · k/j fwd/back · a/d left/right · h/l yaw · [/] step · x/ESC stop ",
@@ -1256,13 +1590,10 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
             Style::new().bg(YELLOW).fg(CRUST).add_modifier(Modifier::BOLD),
         )],
         None => vec![Span::styled(
-            " [a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old [g]oto [x]jog [m]ode o[F]fboard [H]ome [E]KF [b]reboot [K]ill · [:]cmd · [y] preflight · [n] map · SPACE mark · [v] all · ENTER full UI · [A]ck · q",
+            " [a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old [g]oto [x]jog [m]ode o[F]fboard [H]ome [E]KF [b]reboot [K]ill · [:]cmd · [y] preflight · [n] map · SPACE mark · [v] all · [e] record selected · 1-9/M marker · ENTER full UI · [A]ck · q",
             dim,
         )],
-    };
-    if !fleet.note.is_empty() {
-        bar.push(Span::styled(format!("   {}", fleet.note), Style::new().fg(YELLOW)));
-    }
+    });
     frame.render_widget(Paragraph::new(Line::from(bar)), keys);
 
     if let Some(p) = &fleet.prompt {
@@ -1277,6 +1608,7 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
                 let ask = match kind {
                     InputKind::Takeoff => format!("Takeoff altitude in metres for {who} (blank = 2.5):"),
                     InputKind::Mode => format!("Flight mode for {who} (e.g. posctl, hold, mission, offboard):"),
+                    InputKind::Marker => "Recording marker: \"label: note\" or just a note".to_string(),
                     InputKind::Goto => format!("Goto for {who}: [r] fwd right down [yaw] · l N E D [yaw] · g lat lon alt [yaw] · h [yaw] (home, current alt)   e.g. 10 0 -2"),
                 };
                 vec![

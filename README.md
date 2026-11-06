@@ -27,7 +27,7 @@ and [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by
 - **Parameters, logs, calibration, firmware** — the usual setup tasks, without leaving the terminal
 - **Flight review** — open a `.ulg` and page through Flight Review plots (attitude, rates, vibration, spectra, failsafes, EKF...) right in the terminal
 - **Payload** — aim the gimbal, take photos / video, operate a gripper, winch or spare outputs
-- **Fleet view** — watch and command several drones side by side
+- **Fleet view** — watch and command several drones side by side, upload a KML / `.plan` fence or mission to them, and record the selected ones (`v` / `SPACE`, then `e`) into one folder named after their namespaces
 - **Recording** — one pane (`e`) records the whole flight into one folder: MAVLink `.tlog`, every tmux pane, rosbag, screen, CPU / vehicle CSV, pings, your own commands, markers, and a manifest + summary at the end
 - **Replay** — with `--tlog`, the session is saved and can be played back later
 - **ROS 2 (optional)** — shows LiDAR scans and planned paths on the map

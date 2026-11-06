@@ -21,6 +21,9 @@
 
 [record]
 # The [e] RECORD pane. `R` starts every recorder set to true here.
+# namespace = ""                    # e.g. "uav_1" (or --namespace); "" = $UAV_NAME /
+#                                   # $PX4_UXRCE_DDS_NS, else uav_<system id>. Names the run
+#                                   # folder <date>_<time>_<namespace>/ and its files
 # dir = "~/logs"                    # runs: <dir>/<date>_<time>[_name]/
 # state_dir = "~/.tmux-recording"   # <state_dir>/<tmux session> = the active run dir
 # tlog = true                       # mavlink/telemetry.tlog, from this link
@@ -31,6 +34,7 @@
 # ros_setup = ""                    # sourced first, e.g. "~/ros2_ws/install/setup.bash"
 # rosbag_topics = []                # non-empty = only these (the excludes are ignored)
 # rosbag_exclude = [".*image_raw.*"] # DON'T RECORD CAMERAS - too much data can upset ROS
+# rosbag_exclude_topics = []        # exact topic names to leave out ([t] in RECORD toggles them)
 # rosbag_args = []                  # e.g. ["-s", "mcap", "--max-bag-duration", "600"]
 # rosbag_stall_s = 30               # alert when the bag stops growing
 # system = true                     # system.csv: host + vehicle, 1 Hz
