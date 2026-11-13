@@ -14,7 +14,7 @@ if [ "${1:-}" = "--ros" ]; then
         exit 1
     fi
     # Only generate the message types lazypx4 uses (much faster build).
-    export IDL_PACKAGE_FILTER="std_msgs;sensor_msgs;nav_msgs;geometry_msgs;builtin_interfaces;rosgraph_msgs;rcl_interfaces"
+    export IDL_PACKAGE_FILTER="std_msgs;std_srvs;geometry_msgs;builtin_interfaces;rosgraph_msgs;rcl_interfaces"
     features=(--features ros)
 fi
 

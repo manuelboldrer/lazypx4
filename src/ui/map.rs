@@ -5,8 +5,8 @@
 //! arrow is the EKF local solution, the cyan `⊕` the raw GNSS fix projected
 //! through GPS_GLOBAL_ORIGIN - watching them converge is the quickest read on
 //! an RTK bring-up. Layers, lowest priority first: axes, trail (Braille),
-//! KML fence (yellow dots), planned queue path (cyan Braille), ROS navpath
-//! (blue Braille), LiDAR scan (height-coloured Braille), then the markers.
+//! KML fence (yellow dots), planned queue path (cyan Braille), then the
+//! markers.
 //! Under all of it, once [i] fetched one, the satellite snapshot as
 //! truecolour half-blocks (two image pixels per cell, glyph cells darkened
 //! behind their glyph) - or, on a kitty-graphics terminal, the image itself
@@ -22,23 +22,12 @@ use super::*;
 use crate::geo;
 use crate::kitty;
 use crate::satellite::SatImage;
-use crate::state::{LidarFrame, Target, now};
+use crate::state::{Target, now};
 
 pub const BRAILLE_BITS: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
 pub fn braille(bits: u8) -> char {
     char::from_u32(0x2800 + bits as u32).unwrap_or(' ')
-}
-
-/// Low-to-high colour bands for height / depth, as LiDAR viewers do.
-pub const BANDS: [Color; 5] = [BLUE, CYAN, GREEN, YELLOW, RED];
-
-pub fn band_color(v: f64, lo: f64, hi: f64) -> Color {
-    if hi <= lo {
-        return BANDS[0];
-    }
-    let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
-    BANDS[((t * BANDS.len() as f64) as usize).min(BANDS.len() - 1)]
 }
 
 pub fn heading_arrow(yaw_deg: f64) -> char {
@@ -382,9 +371,9 @@ fn wrap_keys(keys: &[&str], width: usize, sep: &str) -> Vec<String> {
 }
 
 const MAP_KEYS: &[&str] = &[
-    "[g] goto", "[W] wp queue", "[C] coverage", "[P] publish gps", "[x] jog", "[o] load kml",
+    "[g] goto", "[W] wp queue", "[C] coverage", "[x] jog", "[o] load kml",
     "[O] upload fence", "[+]/[-] zoom", "[arrows] pan", "[u] follow", "[0] reset", "[f] fit kml", "[t] trail", "[c] clear",
-    "[V] lidar", "[B] lidar frame", "[N] navpath", "[i] sat", "[I] sat on/off", "[n] back", "ESC panels",
+    "[i] sat", "[I] sat on/off", "[n] back", "ESC panels",
 ];
 
 fn baseline_text(m: f64) -> String {
@@ -405,7 +394,6 @@ fn offset_verdict(delta: f64) -> Ln {
 pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     let st = ctx.st;
     let session = &ctx.app.session;
-    let ros = crate::host::lock(&ctx.app.ros);
     let t = now();
     let bold = |c: Color| Style::new().fg(c).add_modifier(Modifier::BOLD);
 
@@ -441,27 +429,9 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     let path_len: f64 = path_targets.windows(2).map(|w| geo::distance_m(w[0].lat, w[0].lon, w[1].lat, w[1].lon)).sum();
     let queue_target_local = if st.wp_queue_active { st.wp_queue.front().and_then(|q| local(q.lat, q.lon)) } else { None };
 
-    let fire = ros.fire.filter(|_| ros.fire_last > 0.0);
-    let fire_local = fire.and_then(|(la, lo, _)| local(la, lo));
-    let fire_rel = match (fire, fire_local) {
-        (Some((_, _, alt)), Some((fnn, fe))) if valid => {
-            let fd = if alt.is_finite() { -(alt - st.local_origin_alt) } else { 0.0 };
-            let (rn, re, rd) = (fnn - lx, fe - ly, fd - lz);
-            Some((rn, re, rd, (rn * rn + re * re + rd * rd).sqrt()))
-        }
-        _ => None,
-    };
-    let navpath: &[(f64, f64)] = if st.map_navpath_enabled { &ros.navpath_points } else { &[] };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    if !ros.gps_feedback.is_empty() {
-        let bg = if ros.gps_feedback_ok { GREEN } else { RED };
-        lines.push(Line::from(Span::styled(
-            format!(" [P] GPS {} ", ros.gps_feedback),
-            Style::new().bg(bg).fg(CRUST).add_modifier(Modifier::BOLD),
-        )));
-    }
     let arm = if st.armed { Ln::new().fg("ARMED", GREEN) } else { Ln::new().dim("DISARMED") };
     lines.push(Ln::new().raw(" MODE: ").bold(st.mode.clone()).raw("   ").spans(arm.0).line());
 
@@ -681,8 +651,6 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     let mut geometry: Vec<(f64, f64)> = waypoints_local.iter().flatten().copied().collect();
     geometry.extend(rings_local.iter().flatten().copied());
     geometry.extend(path_local.iter().copied());
-    geometry.extend(navpath.iter().copied());
-    geometry.extend(fire_local);
     geometry.retain(in_range);
 
     // To scale: a North extent needs 1/k times the East half-range.
@@ -752,30 +720,6 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         grid.marker(last.0, last.1, 'E', bold(RED));
     }
 
-    if navpath.len() >= 2 {
-        let cells = grid.braille_polyline(navpath);
-        grid.paint_braille(cells, |_| Style::new().fg(BLUE), Layer::Path, &[Layer::Empty, Layer::Fence]);
-        // A round trip ends on its start: draw `e` first so `s` stays.
-        let (s, e) = (navpath[0], navpath[navpath.len() - 1]);
-        grid.marker(e.0, e.1, 'e', bold(RED));
-        grid.marker(s.0, s.1, 's', bold(GREEN));
-    }
-
-    // LiDAR scan, lowest priority. Body frame (x fwd, y left): rotated by
-    // yaw and placed at the vehicle, assuming a centred, body-aligned mount.
-    // World frame (ENU map/odom): x east, y north, drawn as-is.
-    let lidar_fresh = ros.lidar_last > 0.0 && t - ros.lidar_last < 2.0;
-    let (z_lo, z_hi) = ros.lidar_points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p[2]), b.max(p[2])));
-    let lidar_frame = st.map_lidar_frame;
-    if st.map_lidar_enabled && lidar_fresh {
-        let (c, s) = (st.yaw.to_radians().cos(), st.yaw.to_radians().sin());
-        let world = lidar_frame == LidarFrame::World;
-        let pts = ros.lidar_points.iter().map(|p| {
-            if world { (p[1], p[0], p[2]) } else { (lx + p[0] * c + p[1] * s, ly + p[0] * s - p[1] * c, p[2]) }
-        });
-        let cells = grid.braille_points(pts);
-        grid.paint_braille(cells, |z| Style::new().fg(band_color(z, z_lo, z_hi)), Layer::Trail, &[Layer::Empty]);
-    }
 
     for (i, w) in waypoints_local.iter().enumerate() {
         if let Some((n, e)) = w {
@@ -794,9 +738,6 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
     }
     if let Some((x, y)) = target {
         grid.marker(x, y, '*', Style::new());
-    }
-    if let Some((n, e)) = fire_local.filter(in_range) {
-        grid.marker(n, e, 'F', bold(RED));
     }
     if let Some((n, e)) = gps_local {
         grid.marker(n, e, '⊕', Style::new().fg(CYAN));
@@ -936,76 +877,6 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         lines.push(Ln::new().raw(" WP QUEUE  ").dim(st.wp_queue_status.clone()).line());
     }
 
-    if st.map_lidar_enabled {
-        let note = if !ros.available {
-            Ln::new().dim("no ROS 2 - LiDAR unavailable")
-        } else if !lidar_fresh {
-            Ln::new().fg("no recent scan", YELLOW).raw(format!(" on {}", ros.lidar_topic))
-        } else {
-            let mut l = Ln::new().raw(format!("{} pts   height {z_lo:.1} m ", ros.lidar_points.len()));
-            for c in BANDS {
-                l = l.fg("█", c);
-            }
-            let how = match lidar_frame {
-                LidarFrame::World => "world ENU, drawn as-is",
-                LidarFrame::Body => "robot frame, at vehicle, rotated by yaw",
-            };
-            let frame = if ros.lidar_frame_id.is_empty() { "--" } else { &ros.lidar_frame_id };
-            l.raw(format!(" {z_hi:.1} m   ")).dim(format!("frame {frame} -> [B] {how}"))
-        };
-        lines.push(Ln::new().raw(" LIDAR     ").spans(note.0).line());
-    }
-
-    if let Some((la, lo, alt)) = fire {
-        let mut l = Ln::new().raw(" FIRE      ").st("F", bold(RED)).raw(format!("  {la:.7}, {lo:.7}"));
-        match fire_local {
-            None => l = l.raw("   ").dim("no local origin yet - cannot place it on the grid"),
-            Some((n, e)) => {
-                l = l
-                    .raw(format!("   alt {alt:.1} m   from origin H: N {n:+8.2}  E {e:+8.2} m"))
-                    .dim(format!("   received {:.0}s ago", t - ros.fire_last));
-            }
-        }
-        lines.push(l.line());
-        if fire_local.is_some_and(|p| !in_range(&p)) {
-            lines.push(Ln::new().fg(format!("   more than {:.0} km from the origin - not drawn on the grid", MAP_RANGE_MAX_M / 1000.0), YELLOW).line());
-        }
-        if let Some((rn, re, rd, d)) = fire_rel {
-            lines.push(Line::from(format!("   Fire rel. UAV (NED)  N {rn:+8.2}   E {re:+8.2}   D {rd:+8.2} m   dist {d:.1} m")));
-        }
-    } else if ros.available {
-        let note = if ros.fire_publishers.is_empty() {
-            Ln::new().dim("no publisher seen")
-        } else {
-            Ln::new().fg("published but nothing received yet", YELLOW).raw(" - ").dim(ros.fire_publishers.join(", "))
-        };
-        lines.push(Ln::new().raw(" FIRE      ").spans(note.0).raw(format!(" on {GPS_PUBLISH_TOPIC}")).line());
-    }
-
-    if st.map_navpath_enabled {
-        let note = if !ros.available {
-            Ln::new().dim(format!("no ROS 2 - path unavailable ({})", ros.error))
-        } else if ros.navpath_last == 0.0 && !ros.navpath_publishers.is_empty() {
-            Ln::new()
-                .fg("published but nothing received yet", YELLOW)
-                .raw(" - ")
-                .dim(ros.navpath_publishers.join(", "))
-                .raw(format!(" on {}", ros.navpath_topic))
-        } else if ros.navpath_last == 0.0 {
-            Ln::new().dim("no publisher seen").raw(format!(" on {}", ros.navpath_topic))
-        } else {
-            let closed = navpath.len() >= 2 && navpath[0] == navpath[navpath.len() - 1];
-            Ln::new()
-                .fg("⣿", BLUE)
-                .raw(format!(" {} pose(s)   ", navpath.len()))
-                .st("s", bold(GREEN))
-                .raw(" start  ")
-                .st("e", bold(RED))
-                .raw(if closed { " end (= start)   " } else { " end   " })
-                .dim(format!("received {:.0}s ago (ENU map frame)", t - ros.navpath_last))
-        };
-        lines.push(Ln::new().raw(" NAVPATH   ").spans(note.0).line());
-    }
 
     let total = st.mission_upload_items.len();
     if st.mission_upload_active {

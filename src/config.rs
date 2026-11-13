@@ -32,11 +32,12 @@ pub struct Settings {
     pub ulog_upload_server: String,
     /// .kml to load as the map overlay at start-up (like pressing [o]).
     pub kml_path: Option<String>,
-    /// ROS 2 topics (only used by a `--features ros` build).
-    pub lidar_topic: String,
-    pub navpath_topic: String,
+    /// Follow /clock for the dashboard's ROS clock (`--features ros`).
     #[cfg_attr(not(feature = "ros"), allow(dead_code))]
     pub use_sim_time: bool,
+    /// [w] ROS pane: confirm publishes / calls, and the preset actions.
+    pub ros_confirm: bool,
+    pub ros_actions: Vec<crate::rospane::ActionCfg>,
     /// Battery % thresholds for the yellow warning / red failsafe colour.
     pub battery_low: f64,
     pub battery_critical: f64,
@@ -107,9 +108,11 @@ pub struct PathsFile {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RosFile {
-    pub lidar_topic: Option<String>,
-    pub navpath_topic: Option<String>,
     pub use_sim_time: Option<bool>,
+    /// The [w] ROS pane asks "type YES" before a publish / call.
+    pub confirm: Option<bool>,
+    /// The [w] ROS pane's preset publishes / service calls.
+    pub action: Vec<crate::rospane::ActionCfg>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -601,11 +604,6 @@ pub const WP_QUEUE_YAW_TOLERANCE_DEG: f64 = 8.0;
 pub const WP_QUEUE_ROTATE_TIMEOUT_S: f64 = 20.0;
 
 pub const FENCE_UPLOAD_TIMEOUT: f64 = 15.0;
-
-pub const GPS_PUBLISH_TOPIC: &str = "/fire_gps_loc";
-#[cfg_attr(not(feature = "ros"), allow(dead_code))]
-pub const GPS_PUBLISH_FRAME_ID: &str = "gps";
-pub const GPS_PUBLISH_FEEDBACK_TIMEOUT_S: f64 = 4.0;
 
 pub const MAP_IMAGE_SIZE: u32 = 1024;
 pub const MAP_IMAGE_MIN_SPAN_M: f64 = 120.0;

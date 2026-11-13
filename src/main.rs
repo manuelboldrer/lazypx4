@@ -24,6 +24,7 @@ mod preflight;
 mod px4mode;
 mod record;
 mod ros;
+mod rospane;
 mod tlog;
 mod satellite;
 mod state;
@@ -101,16 +102,6 @@ struct Cli {
     /// Load a .kml file as the map's fence/waypoint overlay on start-up
     #[arg(long, value_name = "FILE")]
     kml: Option<String>,
-
-    /// ROS 2 sensor_msgs/PointCloud2 topic for the map's [V] LiDAR overlay
-    /// [default: /livox/points]
-    #[arg(long, value_name = "TOPIC")]
-    lidar_topic: Option<String>,
-
-    /// ROS 2 nav_msgs/Path topic (ENU map frame) for the map's [N] overlay
-    /// [default: /navsat_utm_path]
-    #[arg(long, value_name = "TOPIC")]
-    navpath_topic: Option<String>,
 
     /// Use /clock (simulation time) for the ROS clock
     #[arg(long)]
@@ -222,9 +213,9 @@ fn main() -> std::process::ExitCode {
             .trim_end_matches('/')
             .to_string(),
         kml_path: cli.kml.or(paths.kml),
-        lidar_topic: pick(cli.lidar_topic, ros.lidar_topic, "/livox/points"),
-        navpath_topic: pick(cli.navpath_topic, ros.navpath_topic, "/navsat_utm_path"),
         use_sim_time: cli.use_sim_time || ros.use_sim_time.unwrap_or(false),
+        ros_confirm: ros.confirm.unwrap_or(true),
+        ros_actions: ros.action,
         battery_low: safety.battery_low.unwrap_or(config::DEFAULT_BATTERY_LOW),
         battery_critical: safety.battery_critical.unwrap_or(config::DEFAULT_BATTERY_CRITICAL),
         tlog_dir: record_tlog.then(|| pick(cli.tlog_dir, paths.tlog_dir, "./px4_tlogs")),

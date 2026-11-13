@@ -35,6 +35,7 @@ pub enum Screen {
     Calibration,
     Firmware,
     Record,
+    Ros,
     About,
 }
 
@@ -56,6 +57,7 @@ pub const NAV_ITEMS: &[(Screen, &str, Option<char>)] = &[
     (Screen::Calibration, "CALIBRATE", Some('s')),
     (Screen::Firmware, "FLASH FIRMWARE", Some('f')),
     (Screen::Record, "RECORD", Some('e')),
+    (Screen::Ros, "ROS", Some('w')),
     (Screen::About, "ABOUT", None),
 ];
 
@@ -76,6 +78,7 @@ impl Screen {
             Screen::Shell => "PX4 MAVLINK SHELL · NSH",
             Screen::Host => "HOST · USB / NETWORK",
             Screen::Record => "RECORD · TLOG · TMUX · ROSBAG · SCREEN · MARKERS",
+            Screen::Ros => "ROS 2 · ROSOUT · PUBLISH · SERVICES",
             Screen::About => "ABOUT · LAZYPX4",
             Screen::Preflight => "PREFLIGHT · GO / NO-GO",
         }
@@ -86,7 +89,7 @@ impl Screen {
     pub fn scrolls_as_page(self) -> bool {
         !matches!(
             self,
-            Screen::ModeSelect | Screen::Parameters | Screen::Log | Screen::FlightLogs | Screen::Shell | Screen::Review | Screen::Record
+            Screen::ModeSelect | Screen::Parameters | Screen::Log | Screen::FlightLogs | Screen::Shell | Screen::Review | Screen::Record | Screen::Ros
         )
     }
 
@@ -155,7 +158,6 @@ pub enum InputKind {
     Kml,
     WpQueue,
     Coverage,
-    LidarTopic,
     ParamSave,
     ParamLoad,
     ParamDiff,
@@ -310,6 +312,12 @@ pub struct App {
     /// [e] RECORD pane: recorders and the open run.
     pub rec: crate::record::Recording,
     pub(crate) rec_jobs: crate::app_record::RecJobs,
+    /// [w] ROS pane: its node (rosout, publishes, calls) and the view.
+    pub ros_console: crate::rospane::Console,
+    pub ros_pane: crate::rospane::RosPane,
+    ros_console_thread: Option<std::thread::JoinHandle<()>>,
+    /// Newest console result already copied into the event log.
+    ros_feedback_seen: u64,
     pub(crate) log_rx: Arc<Mutex<Receiver<flightlog::Chunk>>>,
     pub(crate) shutdown: Arc<AtomicBool>,
     ros_thread: Option<std::thread::JoinHandle<()>>,
@@ -317,7 +325,7 @@ pub struct App {
 }
 
 /// Key names, as the Python keyboard thread produces them.
-fn key_name(ev: KeyEvent) -> Option<String> {
+pub(crate) fn key_name(ev: KeyEvent) -> Option<String> {
     let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
     Some(match ev.code {
         KeyCode::Char(c) if ctrl => format!("CTRL_{}", c.to_ascii_uppercase()),
@@ -443,6 +451,13 @@ impl App {
         let ros = crate::ros::new(&settings);
         let ros_thread = crate::ros::spawn(ros.clone(), shared.clone(), &settings, shutdown.clone());
 
+        let ros_console = crate::rospane::new_console();
+        let ros_console_thread = crate::rospane::spawn(ros_console.clone(), shutdown.clone());
+        let (ros_pane, ros_errors) = crate::rospane::RosPane::new(&settings.ros_actions, settings.ros_confirm, &settings.record.ros_setup);
+        for e in ros_errors {
+            state::lock(&shared).warn(e);
+        }
+
         let rec = crate::record::Recording::new(settings.record.clone(), &["mavlink".to_string()], settings.replay.is_some());
         let mut app = App {
             session: Session {
@@ -460,6 +475,10 @@ impl App {
             review: Default::default(),
             rec,
             rec_jobs: Default::default(),
+            ros_console,
+            ros_pane,
+            ros_console_thread,
+            ros_feedback_seen: 0,
             log_rx: Arc::new(Mutex::new(log_rx)),
             shutdown,
             ros_thread,
@@ -521,6 +540,9 @@ impl App {
         if let Some(t) = self.ros_thread.take() {
             let _ = t.join();
         }
+        if let Some(t) = self.ros_console_thread.take() {
+            let _ = t.join();
+        }
         Ok(())
     }
 
@@ -549,17 +571,12 @@ impl App {
         drop(st);
         self.review_poll();
         self.rec_tick();
+        self.ros_pane_tick();
         let mut st = state::lock(&self.shared);
         if self.session.screen == Screen::Payload {
             crate::mav::payload::poll_camera(&self.link, &mut st);
         }
         drop(st);
-
-        // The [P] banner on the map expires like the dashboard's PREARM one.
-        let mut ros = crate::host::lock(&self.ros);
-        if !ros.gps_feedback.is_empty() && t - ros.gps_feedback_time > GPS_PUBLISH_FEEDBACK_TIMEOUT_S {
-            ros.gps_feedback.clear();
-        }
     }
 
     pub(crate) fn configure_streams_async(&self) {
@@ -667,7 +684,6 @@ impl App {
                     InputKind::Kml => self.load_kml(&input.buffer),
                     InputKind::WpQueue => self.wp_queue_submit(&input.buffer),
                     InputKind::Coverage => self.coverage_submit(&input.buffer),
-                    InputKind::LidarTopic => self.lidar_topic_submit(&input.buffer),
                     InputKind::ParamSave => self.param_save_submit(&input.buffer),
                     InputKind::ParamLoad => self.param_load_submit(&input.buffer),
                     InputKind::GimbalRoi => self.gimbal_roi_submit(&input.buffer),
@@ -1117,6 +1133,7 @@ impl App {
             || self.session.search_active
             || self.session.help_open
             || (self.session.screen == Screen::Shell && !self.session.sidebar_focused)
+            || (self.session.screen == Screen::Ros && !self.session.sidebar_focused && self.ros_pane.typing())
             || (self.session.screen == Screen::Parameters && self.session.param_edit.is_some());
         let key = match self.settings.keys.get(&key) {
             Some(mapped) if !typing && mapped.is_empty() => return,
@@ -1174,6 +1191,15 @@ impl App {
         // A committed shell swallows every key, Tab and letters included.
         if self.session.screen == Screen::Shell && !self.session.sidebar_focused {
             self.handle_shell_key(&key);
+            return;
+        }
+        // So does a ROS pane prompt (filter, publish line, YES).
+        if self.session.screen == Screen::Ros && !self.session.sidebar_focused && self.ros_pane.typing() {
+            if key == "CTRL_C" {
+                self.quit();
+            } else {
+                self.handle_ros_key(&key);
+            }
             return;
         }
 
@@ -1260,6 +1286,7 @@ impl App {
             Screen::Review => self.handle_review_key(&key),
             Screen::Calibration => self.handle_calibration_key(&key),
             Screen::Record => self.handle_record_key(&key),
+            Screen::Ros => self.handle_ros_key(&key),
             Screen::Dashboard => self.handle_dashboard_key(&key),
             screen => {
                 // Control, About and the not-yet-ported screens: own hotkey
@@ -1798,6 +1825,43 @@ impl App {
             format!("Set {name} to {}? Type YES", params::fmt_g(parsed, 12)),
             Action::SetParam(name.to_string(), parsed),
         );
+    }
+}
+
+impl App {
+    /// Where the [w] pane's relative names go: the configured / environment
+    /// namespace (`[record] namespace`, `--namespace`, UAV_NAME...), else /.
+    pub(crate) fn ros_targets(&self) -> Vec<crate::rospane::Target> {
+        let configured = self.rec.cfg.namespace.trim().trim_matches('/');
+        let ns = if configured.is_empty() { crate::record::env_namespace() } else { Some(configured.to_string()) };
+        vec![crate::rospane::Target { label: "this vehicle".into(), ns }]
+    }
+
+    fn ros_pane_tick(&mut self) {
+        self.ros_pane.poll();
+        let new = crate::rospane::take_new_feedback(&self.ros_console, &mut self.ros_feedback_seen);
+        if new.is_empty() {
+            return;
+        }
+        let mut st = state::lock(&self.shared);
+        for f in new {
+            match f.ok {
+                Some(false) => st.warn(format!("ROS {}", f.text)),
+                _ => st.command(format!("ROS {}", f.text)),
+            }
+        }
+    }
+
+    fn handle_ros_key(&mut self, key: &str) {
+        let targets = self.ros_targets();
+        if self.ros_pane.key(key, &self.ros_console, &targets) {
+            return;
+        }
+        match key {
+            "w" => self.session.screen = Screen::Dashboard,
+            "ESC" => self.focus_sidebar(),
+            _ => {}
+        }
     }
 }
 

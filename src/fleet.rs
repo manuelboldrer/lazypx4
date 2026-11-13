@@ -13,6 +13,9 @@
 //! [i] fetches one satellite snapshot framing them all to draw under it.
 //! The start-up `--kml` / `kml` overlay is drawn there too, and handed to
 //! every vehicle opened with ENTER.
+//!
+//! [w] swaps in the ROS pane (rosout, publishes, service calls): relative
+//! names go to every target vehicle under its `uav_<sys>` namespace.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
@@ -288,6 +291,8 @@ enum Pane {
     Events,
     Preflight,
     Map,
+    /// [w]: the ROS pane, which then has the keyboard.
+    Ros,
 }
 
 /// The fleet map's satellite snapshot ([i]), filled by a download thread.
@@ -329,6 +334,12 @@ struct Fleet<'a> {
     rec_finish_pending: bool,
     /// Companion-computer stats - one host, shared by every row's preflight.
     sys: Arc<Mutex<crate::host::SystemStats>>,
+    /// [w] ROS pane and its node.
+    ros_console: crate::rospane::Console,
+    ros_pane: crate::rospane::RosPane,
+    ros_seen: u64,
+    /// [n] inside the ROS pane: the fleet map beside it.
+    ros_map: bool,
 }
 
 /// Keyboard jog on the targets: every key is a DO_REPOSITION nudge to
@@ -624,7 +635,6 @@ impl Fleet<'_> {
                     let text = format!("{} - {}", self.names(&targets), prompt);
                     self.prompt = Some(Prompt::Confirm { text, buffer: String::new(), command: Command::Goto(target), targets });
                 }
-                Ok(Goto::Fire(_)) => self.note = "goto: the fire target needs the full UI (ENTER)".into(),
                 Err(e) => self.note = e,
             },
         }
@@ -1087,6 +1097,66 @@ impl Fleet<'_> {
         }
     }
 
+    /// The ROS pane's targets: the marked rows (else the selected one),
+    /// each under `uav_<sys>` once its system id is known.
+    fn ros_targets(&self) -> Vec<crate::rospane::Target> {
+        self.targets()
+            .into_iter()
+            .map(|i| {
+                let sys = self.slots[i].unit.as_ref().map(|u| state::lock(&u.shared).target_system).unwrap_or(0);
+                crate::rospane::Target { label: self.slots[i].label(), ns: (sys != 0).then(|| format!("uav_{sys}")) }
+            })
+            .collect()
+    }
+
+    /// A key while the ROS pane is up. SPACE / J K / : / A still mark,
+    /// move and command; everything else is the pane's.
+    fn ros_key(&mut self, key: KeyEvent) {
+        let typing = self.ros_pane.typing();
+        let n = self.slots.len();
+        let i = self.selected();
+        if !typing {
+            match key.code {
+                KeyCode::Char('w') | KeyCode::Esc => {
+                    self.pane = if self.ros_map { Pane::Map } else { Pane::Events };
+                    return;
+                }
+                KeyCode::Char('n') => {
+                    self.ros_map = !self.ros_map;
+                    return;
+                }
+                KeyCode::Char('+' | '=') if self.ros_map => return self.map_zoom = (self.map_zoom * 1.5).min(500.0),
+                KeyCode::Char('-') if self.ros_map => return self.map_zoom = (self.map_zoom / 1.5).max(0.05),
+                KeyCode::Char('0') if self.ros_map => return self.map_zoom = 1.0,
+                KeyCode::Char(' ') => {
+                    self.marked[i] = !self.marked[i];
+                    return;
+                }
+                KeyCode::Char('J') => return self.table.select(Some((i + 1) % n)),
+                KeyCode::Char('K') => return self.table.select(Some((i + n - 1) % n)),
+                KeyCode::Char(':') => return self.open_cmdline(),
+                KeyCode::Char('A') => {
+                    for u in self.slots.iter().filter_map(|s| s.unit.as_ref()) {
+                        state::lock(&u.shared).alerts.clear();
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+        let Some(name) = crate::app::key_name(key) else { return };
+        let name = if typing { name } else { crate::app::normalize_vim_key(name) };
+        let targets = self.ros_targets();
+        self.ros_pane.key(&name, &self.ros_console, &targets);
+    }
+
+    fn ros_tick(&mut self) {
+        self.ros_pane.poll();
+        if let Some(f) = crate::rospane::take_new_feedback(&self.ros_console, &mut self.ros_seen).pop() {
+            self.note = format!("ROS {}", f.text);
+        }
+    }
+
     /// Free the port, run the full UI on it, then serve it again.
     fn open(&mut self, terminal: &mut DefaultTerminal, config: Option<&str>) -> std::io::Result<()> {
         let i = self.selected();
@@ -1139,6 +1209,10 @@ fn expand_path(path: &str) -> String {
 }
 
 pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], config: Option<&str>) -> std::io::Result<()> {
+    let ros_console = crate::rospane::new_console();
+    let ros_stop = Arc::new(AtomicBool::new(false));
+    let ros_thread = crate::rospane::spawn(ros_console.clone(), ros_stop.clone());
+    let (ros_pane, ros_errors) = crate::rospane::RosPane::new(&settings.ros_actions, settings.ros_confirm, &settings.record.ros_setup);
     let mut fleet = Fleet {
         slots: ports.iter().map(|&port| Slot { port, unit: None, error: String::new(), opened: false, params_requested_at: 0.0 }).collect(),
         settings,
@@ -1163,7 +1237,14 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
         ),
         rec_finish_pending: false,
         sys: Arc::new(Mutex::new(crate::host::SystemStats::default())),
+        ros_console,
+        ros_pane,
+        ros_seen: 0,
+        ros_map: false,
     };
+    if let Some(e) = ros_errors.first() {
+        fleet.note = e.clone();
+    }
     let sysmon_stop = Arc::new(AtomicBool::new(false));
     {
         let (sys, disk, sd) = (fleet.sys.clone(), settings.disk_path.clone(), sysmon_stop.clone());
@@ -1188,6 +1269,7 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
         }
         fleet.request_preflight_params();
         fleet.rec_tick();
+        fleet.ros_tick();
         terminal.draw(|f| draw(f, &mut fleet))?;
         crate::kitty::flush();
 
@@ -1211,6 +1293,10 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
         }
         if fleet.jog.is_some() {
             fleet.jog_key(key.code);
+            continue;
+        }
+        if fleet.pane == Pane::Ros {
+            fleet.ros_key(key);
             continue;
         }
         fleet.note.clear();
@@ -1238,6 +1324,11 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
             KeyCode::Char('n') => {
                 fleet.pane = if fleet.pane == Pane::Map { Pane::Events } else { Pane::Map };
             }
+            KeyCode::Char('w') => {
+                // From the map, keep it beside the ROS pane.
+                fleet.ros_map = fleet.pane == Pane::Map;
+                fleet.pane = Pane::Ros;
+            }
             KeyCode::Char('i') => fleet.fetch_satellite(),
             KeyCode::Char('I') => fleet.sat_hidden = !fleet.sat_hidden,
             KeyCode::Char('+' | '=') => fleet.map_zoom = (fleet.map_zoom * 1.5).min(500.0),
@@ -1259,6 +1350,10 @@ pub fn run(terminal: &mut DefaultTerminal, settings: &Settings, ports: &[u16], c
         }
     }
     sysmon_stop.store(true, Ordering::Relaxed);
+    ros_stop.store(true, Ordering::Relaxed);
+    if let Some(t) = ros_thread {
+        let _ = t.join();
+    }
     if fleet.rec.recording() {
         let vehicles = Fleet::rec_vehicles(&fleet.slots);
         fleet.rec.shutdown(&vehicles);
@@ -1559,8 +1654,34 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
             .title(format!(" PREFLIGHT · {} ", slot.label())),
     );
     // Side by side when there's room (the map replaces the preflight on
-    // the right), else [y] / [n] pick one.
-    if detail.width >= 150 {
+    // the right), else [y] / [n] pick one. The ROS pane takes it all.
+    if fleet.pane == Pane::Ros {
+        let targets = fleet.ros_targets();
+        let who: Vec<String> = targets.iter().map(|t| t.label.clone()).collect();
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(GREEN))
+            .title(Line::from(format!(" ROS · targets: {} ", if who.is_empty() { "none".to_string() } else { who.join(", ") })).bold());
+        // [n]: the map beside it - on the right when wide, else below.
+        let (ros_area, map_area) = if !fleet.ros_map {
+            (detail, None)
+        } else if detail.width >= 150 {
+            let [l, r] = Layout::horizontal([Constraint::Min(40), Constraint::Length(84)]).areas(detail);
+            (l, Some(r))
+        } else if detail.width >= 100 {
+            let [l, r] = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(detail);
+            (l, Some(r))
+        } else {
+            let [t, b] = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(detail);
+            (t, Some(b))
+        };
+        let inner = block.inner(ros_area);
+        let lines = fleet.ros_pane.draw(&fleet.ros_console, &targets, inner.width as usize, inner.height as usize);
+        frame.render_widget(Paragraph::new(lines).block(block), ros_area);
+        if let Some(area) = map_area {
+            frame.render_widget(map_widget(fleet, &data, area), area);
+        }
+    } else if detail.width >= 150 {
         let [left, right] = Layout::horizontal([Constraint::Min(40), Constraint::Length(84)]).areas(detail);
         frame.render_widget(events, left);
         if fleet.pane == Pane::Map {
@@ -1572,7 +1693,7 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
         match fleet.pane {
             Pane::Preflight => frame.render_widget(preflight, detail),
             Pane::Map => frame.render_widget(map_widget(fleet, &data, detail), detail),
-            Pane::Events => frame.render_widget(events, detail),
+            Pane::Events | Pane::Ros => frame.render_widget(events, detail),
         }
     }
 
@@ -1589,8 +1710,20 @@ fn draw(frame: &mut ratatui::Frame, fleet: &mut Fleet) {
             ),
             Style::new().bg(YELLOW).fg(CRUST).add_modifier(Modifier::BOLD),
         )],
+        None if fleet.pane == Pane::Ros => vec![Span::styled(
+            if fleet.ros_pane.typing() {
+                format!(" {}", fleet.ros_pane.footer())
+            } else {
+                format!(
+                    " {} · SPACE mark · J/K vehicle · : cmd · [n] map{} · [w]/ESC back",
+                    fleet.ros_pane.footer(),
+                    if fleet.ros_map { " (+/-/0 zoom)" } else { "" }
+                )
+            },
+            dim,
+        )],
         None => vec![Span::styled(
-            " [a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old [g]oto [x]jog [m]ode o[F]fboard [H]ome [E]KF [b]reboot [K]ill · [:]cmd · [y] preflight · [n] map · SPACE mark · [v] all · [e] record selected · 1-9/M marker · ENTER full UI · [A]ck · q",
+            " [a]rm [d]isarm [T]akeoff [L]and [R]TL [h]old [g]oto [x]jog [m]ode o[F]fboard [H]ome [E]KF [b]reboot [K]ill · [:]cmd · [y] preflight · [n] map · [w] ROS · SPACE mark · [v] all · [e] record selected · 1-9/M marker · ENTER full UI · [A]ck · q",
             dim,
         )],
     });

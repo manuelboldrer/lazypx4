@@ -479,14 +479,10 @@ pub struct State {
     pub map_range: f64,
     pub map_trail_enabled: bool,
     pub map_fit_kml: bool,
-    pub map_lidar_enabled: bool,
-    pub map_navpath_enabled: bool,
     /// Arrow-key pan of the view centre, metres N / E.
     pub map_pan: (f64, f64),
     /// [u]: keep the view centred on the vehicle (pan is relative to it).
     pub map_follow: bool,
-    /// [B]: how LiDAR points are placed on the map.
-    pub map_lidar_frame: LidarFrame,
 
     /// KML overlay ([o]) - local visualization only until [O] uploads it.
     pub kml_path: String,
@@ -697,22 +693,3 @@ pub fn classify_statustext(severity: u32, text: &str) -> Level {
     }
 }
 
-/// Frame the LiDAR cloud is expressed in, for the mission-map overlay.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum LidarFrame {
-    /// Robot / sensor frame (FLU): rotated by the vehicle yaw and placed at
-    /// the vehicle position.
-    #[default]
-    Body,
-    /// Already in a world frame (ENU, REP-105 map/odom): drawn as-is.
-    World,
-}
-
-impl LidarFrame {
-    pub fn next(self) -> Self {
-        match self {
-            LidarFrame::Body => LidarFrame::World,
-            LidarFrame::World => LidarFrame::Body,
-        }
-    }
-}

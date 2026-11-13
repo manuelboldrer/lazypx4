@@ -351,6 +351,17 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
             "[R] record all · [S] stop · [F] finish · ENTER start/stop · [i] include · 1-9 / M marker · [V] screen · [p] PX4 log · [u] upload · [e] back".into(),
         ),
         Screen::Preflight => (preflight::draw(ctx), "[y] back · ESC panels · ? keys".into()),
+        Screen::Ros => {
+            let app = ctx.app;
+            let targets = app.ros_targets();
+            let lines = app.ros_pane.draw(&app.ros_console, &targets, ctx.width, ctx.height);
+            let footer = if app.ros_pane.typing() || app.ros_pane.browser.is_some() {
+                app.ros_pane.footer().to_string()
+            } else {
+                format!("{} · [w] back", app.ros_pane.footer())
+            };
+            (lines, footer)
+        }
         Screen::Map => (map::draw(ctx), "j/k scroll · keys listed below the map · [n] back · ESC panels".into()),
         Screen::Host => (hostui::host(ctx), "[i] speed test · [u] back · ESC panels".into()),
         Screen::Firmware => (

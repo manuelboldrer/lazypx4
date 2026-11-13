@@ -96,11 +96,53 @@ cross-check. Flight keys work here too.
 | `o` / `O` | Load a `.kml` or QGC `.plan` (fence + waypoints) / upload the fence to PX4 |
 | `M` | Upload the loaded `.plan` mission to PX4 (`:mode mission` flies it) |
 | `W` / `C` | Fly KML waypoints (`3`, `seq`, `rand 8`) / lawnmower coverage (`5 90`) |
-| `V` / `v` / `B` | LiDAR overlay / change topic / robot vs world frame |
-| `N` | ROS planned-path overlay |
-| `P` | Publish current position as `sensor_msgs/NavSatFix` on `/fire_gps_loc` |
 | `i` / `I` | Download a satellite snapshot (saved, and drawn under the map grid: full resolution on kitty / Ghostty / WezTerm, half-blocks elsewhere or with `LAZYPX4_GRAPHICS=off`) / hide-show it |
 | arrows, `+`/`-`, `0`, `u`, `f` | Pan, zoom, reset, follow vehicle, fit to KML |
+
+### ROS (`w`)
+
+Needs a ROS 2 build (`install/install.sh --ros`). The pane has its own node,
+named `lazypx4_console_<pid>`, and three parts: actions, results and `/rosout`.
+
+| Key | |
+|-----|--|
+| `j` / `k`, `PGUP` / `PGDN`, `G` | Scroll `/rosout` (pauses it) / follow again |
+| `/` | Filter: case-insensitive regex (or plain text) on node + message; `!text` hides the matches |
+| `L` / `v` / `c` | Minimum level (DEBUG … FATAL) / only this vehicle's namespace / clear |
+| `[` / `]`, `ENTER` | Select an action / send it (asks for a value if it has none) |
+| `t` / `f` | `true` / `false` to the selected `Bool` topic or `SetBool` service |
+| `p` | Publish: `TOPIC [TYPE] VALUE`, e.g. `cmd/enable bool true`, `/speed float64 2.5`, `/note string hi`, `/ping empty`, `/x geometry_msgs/msg/Point {"x": 1}` (no type: taken from the graph) |
+| `s` | Call: `SERVICE [TYPE] [ARG]`, e.g. `start` (Trigger), `arm true` (SetBool), `/reset empty`, `/x pkg/srv/T {...}` |
+| `l` | Browse the topics / services in the graph (std_msgs / std_srvs; `a` all types); `ENTER` adds one as an action |
+| `x` | Remove a session action |
+
+Short types are `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`,
+`float64`, `string` and `empty` for topics, and `trigger`, `setbool` and
+`empty` for services. A full `pkg/msg/Type` / `pkg/srv/Type` with a JSON
+value works for any type the build generated bindings for.
+
+Relative names go under the vehicle namespace: `[record] namespace` /
+`--namespace` / `UAV_NAME` in the full UI, `uav_<sys>` per vehicle in the
+fleet. `/absolute` names are used as they are. Each send asks for `YES`
+unless `[ros] confirm = false` is set (or `confirm = false` on the action).
+Presets live in `lazypx4.toml`:
+
+```toml
+[[ros.action]]
+name = "enable"
+topic = "cmd/enable"        # relative: /<ns>/cmd/enable
+type = "bool"               # no value: t / f send true / false
+
+[[ros.action]]
+name = "start mission"
+service = "start_mission"
+type = "trigger"
+confirm = false
+```
+
+A service that has not answered within 5 s is reported. A brand-new
+publisher waits up to 1.5 s for its subscribers to be discovered before
+sending.
 
 ### Payload (`o`)
 
@@ -227,6 +269,7 @@ heartbeats to every vehicle the whole time.
 | `:fence upload` / `:mission upload` | Upload its fence polygons / the `.plan`'s mission to the targets |
 | `:wp <n>\|seq\|rand N [heading]` / `:cover SPACING [ANGLE] [heading]` / `:wp stop` | Fly its waypoints / a lawnmower over its first polygon - one vehicle at a time (several would share the same points); `:wp stop` stops the targets' queues |
 | `e` | Record the selected vehicles (`SPACE` / `v` marks, else the row): one run `<dir>/<date>_<time>_<namespaces>/` (e.g. `..._uav_1_uav_2/`) with `mavlink/uav_<sys>.tlog` per selected vehicle (renamed once a vehicle that connects later is identified) plus tmux, rosbag, system, ping, screen, commands. `e` again while the run is open adds the newly selected vehicles to it. `:rec stop` / `:rec finish` end it (manifest + summary), `:rec name X` renames, quitting stops it cleanly |
+| `w` | ROS pane (see [ROS](#ros-w)) for the targets: a relative name is published / called on every marked vehicle under `/uav_<sys>/`. `SPACE` marks, `J` / `K` move the selection, `:` and `A` still work; `n` puts the fleet map beside it (`+` / `-` / `0` zoom; opening `w` from the map keeps it); `w` / `ESC` closes it |
 | `1`–`9` / `M` | Recording markers (auto markers per vehicle: `uav_1 armed`, mode changes, alerts) |
 | `ENTER` | Full lazypx4 on that vehicle (the loaded KML goes with it; its tlog carries on when you come back); `q` there returns to the fleet |
 | `A` / `q` | Acknowledge alerts / quit |
@@ -247,7 +290,7 @@ the `CHANGED` view.
 
 Defaults can live in [`lazypx4.toml`](../lazypx4.toml) (`--config FILE`, else
 `./lazypx4.toml`, else the one in the repo lazypx4 was built from):
-port, directories, ROS topics, battery thresholds, alert bell, fleet ports,
+port, directories, ROS pane presets, battery thresholds, alert bell, fleet ports,
 the key-parameter panel, key remaps (`"K" = ""` disables the kill key) and
 `:` aliases such as `agent = "!sudo systemctl restart micro-xrce-dds-agent"`.
 Command-line flags override the file.

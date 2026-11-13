@@ -62,8 +62,19 @@
 # server = "https://v2.logs.px4.io" # Flight Review v2 server [u] uploads .ulg logs to
 
 [ros]
-# lidar_topic = "/livox/points"
-# navpath_topic = "/navsat_utm_path"
+# confirm = true                    # [w] ROS pane: type YES before a publish / service call
+#
+# [w] presets. Relative names go under the vehicle namespace (fleet: /uav_<sys>/).
+# [[ros.action]]
+# name = "enable"
+# topic = "cmd/enable"
+# type = "bool"                     # bool int32 float64 string empty ... or std_msgs/msg/Bool; no value = t / f
+# [[ros.action]]
+# name = "start mission"
+# service = "start_mission"
+# type = "trigger"                  # trigger setbool empty, or pkg/srv/Type
+# value = ""                        # fixed value / JSON (omit: ENTER asks, if it needs one)
+# confirm = false
 # use_sim_time = false
 
 [safety]

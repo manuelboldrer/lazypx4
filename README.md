@@ -30,7 +30,7 @@ and [lazydocker](https://github.com/jesseduffield/lazydocker), inspired by
 - **Fleet view** — watch and command several drones side by side, upload a KML / `.plan` fence or mission to them, and record the selected ones (`v` / `SPACE`, then `e`) into one folder named after their namespaces
 - **Recording** — one pane (`e`) records the whole flight into one folder: MAVLink `.tlog`, every tmux pane, rosbag, screen, CPU / vehicle CSV, pings, your own commands, markers, and a manifest + summary at the end
 - **Replay** — with `--tlog`, the session is saved and can be played back later
-- **ROS 2 (optional)** — shows LiDAR scans and planned paths on the map
+- **ROS 2 (optional)** — a `ROS` pane (`w`, in fleet mode too): `/rosout` with a filter, publish std_msgs (`t` / `f` for a Bool), call std_srvs (Trigger, SetBool, Empty), and browse the graph
 
 Everything is a single keypress away, with vim-style navigation. Anything that
 changes the drone's state asks you to type `YES` first.
@@ -78,6 +78,7 @@ mavlink start -u 14560 -o 14560 -t <your-computer-ip> -m onboard -r 4000000
 | `l` | Flight logs |
 | `v` | Flight review: plot a `.ulg` |
 | `e` | Record: `R` start all, `S` stop, `F` finish, `1`–`9` markers |
+| `w` | ROS: rosout + filter, `p` publish, `s` call a service, `t` / `f` true / false |
 | `:` | Type a command (e.g. `:takeoff 5`) |
 | `?` | Help for the current screen |
 | `q` | Quit / go back |

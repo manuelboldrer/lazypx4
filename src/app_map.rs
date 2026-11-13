@@ -1,12 +1,11 @@
 //! Key handling for the mission map (goto, jog, KML, waypoint queue,
-//! coverage, fence upload, satellite, GPS publish, LiDAR topic),
+//! coverage, fence upload, satellite),
 //! USB / network, flash firmware and the flight-log tool jobs. Mirrors the
 //! corresponding parts of `navigation.py`.
 
 use crate::app::{Action, App, GotoTarget, InputKind, Screen, normalize_vim_key};
 use crate::config::*;
 use crate::geo;
-use crate::host::lock;
 use crate::mav::guided;
 use crate::state::{self, Target, now};
 
@@ -28,13 +27,11 @@ pub fn jog_vector(key: &str) -> Option<(f64, f64, f64, f64)> {
 
 /// A parsed goto line.
 pub enum Goto {
-    /// `f [alt] [yaw]`: over the last /fire_gps_loc fix (needs ROS).
-    Fire(Vec<f64>),
     /// Confirmation text + target.
     Target(String, GotoTarget),
 }
 
-/// `[r|l|g|f|h] a b c [yaw]` - the [g] goto syntax, shared with the fleet.
+/// `[r|l|g|h] a b c [yaw]` - the [g] goto syntax, shared with the fleet.
 pub fn parse_goto(text: &str) -> Result<Goto, String> {
     let text = text.replace(',', " ");
     let mut tokens: Vec<&str> = text.split_whitespace().collect();
@@ -45,7 +42,6 @@ pub fn parse_goto(text: &str) -> Result<Goto, String> {
         "r" | "rel" | "relative" => Some("relative"),
         "l" | "local" => Some("local"),
         "g" | "global" => Some("global"),
-        "f" | "fire" => Some("fire"),
         "h" | "home" | "takeoff" => Some("home"),
         _ => None,
     };
@@ -56,9 +52,6 @@ pub fn parse_goto(text: &str) -> Result<Goto, String> {
         return Err("Goto: expected numbers after the optional frame letter".into());
     };
     let frame = frame.unwrap_or("relative");
-    if frame == "fire" {
-        return Ok(Goto::Fire(nums));
-    }
     // Home is resolved per vehicle when sent, so a fleet goto sends each
     // vehicle back over its own takeoff point at its own altitude.
     if frame == "home" {
@@ -163,10 +156,6 @@ impl App {
                 drop(st);
                 self.open_queue_input(false);
             }
-            "P" => {
-                drop(st);
-                self.request_gps_publish();
-            }
             "+" | "=" => st.map_range = (st.map_range / 1.5).clamp(2.0, MAP_RANGE_MAX_M),
             "-" | "_" => st.map_range = (st.map_range * 1.5).clamp(2.0, MAP_RANGE_MAX_M),
             "0" => {
@@ -177,17 +166,9 @@ impl App {
                 st.map_follow = !st.map_follow;
                 st.map_pan = (0.0, 0.0);
             }
-            "B" => st.map_lidar_frame = st.map_lidar_frame.next(),
             "I" => st.map_satellite_hidden = !st.map_satellite_hidden,
             "t" => st.map_trail_enabled = !st.map_trail_enabled,
             "f" => st.map_fit_kml = !st.map_fit_kml,
-            "V" => st.map_lidar_enabled = !st.map_lidar_enabled,
-            "v" => {
-                drop(st);
-                let current = lock(&self.ros).lidar_topic.clone();
-                self.request_input(format!("Point-cloud topic (current: {current}):"), InputKind::LidarTopic);
-            }
-            "N" => st.map_navpath_enabled = !st.map_navpath_enabled,
             "c" => st.position_trail.clear(),
             "r" => {
                 drop(st);
@@ -265,52 +246,16 @@ impl App {
         }
         self.request_input(
             "Goto: [r] fwd right down [yaw] (default)  |  [l] N E D [yaw]  |  [g] lat lon alt [yaw]  |  \
-             [f] fire [alt MSL] [yaw]  |  [h] home [yaw]   e.g.  10 0 -2   or   l 5 -3 -10   or   g 52.218650 6.886870 40   or   f   or   h",
+             [h] home [yaw]   e.g.  10 0 -2   or   l 5 -3 -10   or   g 52.218650 6.886870 40   or   h",
             InputKind::Goto,
         );
     }
 
     pub(crate) fn goto_submit(&mut self, text: &str) {
         match parse_goto(text) {
-            Ok(Goto::Fire(nums)) => self.goto_fire(&nums),
             Ok(Goto::Target(prompt, target)) => self.request_confirmation(prompt, Action::Goto(target)),
             Err(e) => state::lock(&self.shared).error(e),
         }
-    }
-
-    /// `f [alt] [yaw]`: fly over the last /fire_gps_loc fix. The fix's own
-    /// altitude is the ground, so the default is the current altitude.
-    fn goto_fire(&mut self, nums: &[f64]) {
-        let (fire, fire_last) = {
-            let r = lock(&self.ros);
-            (r.fire, r.fire_last)
-        };
-        let mut st = state::lock(&self.shared);
-        let Some((lat, lon, _)) = fire.filter(|_| fire_last > 0.0) else {
-            return st.error(format!("Goto fire: no fix received on {GPS_PUBLISH_TOPIC} yet"));
-        };
-        if !(lat.is_finite() && lon.is_finite()) {
-            return st.error("Goto fire: the last fire fix has no valid lat/lon");
-        }
-        let alt = match nums.first() {
-            Some(a) => *a,
-            None if st.global_pos_valid && st.global_alt.is_finite() => st.global_alt,
-            None => return st.error("Goto fire: no global position to hold the altitude - give one: f <alt MSL>"),
-        };
-        let yaw = nums.get(1).copied();
-        let distance = if st.global_pos_valid {
-            format!("{:.1} m away, ", geo::distance_m(st.global_lat, st.global_lon, lat, lon))
-        } else {
-            String::new()
-        };
-        drop(st);
-        let prompt = format!(
-            "GOTO [fire]  {lat:.7}, {lon:.7} @ {alt:.1} m MSL{}{}   ({distance}fix {:.0}s old). Type YES",
-            if nums.is_empty() { " (current alt)" } else { "" },
-            yaw.map(|y| format!("  yaw {y:.0}")).unwrap_or_default(),
-            now() - fire_last
-        );
-        self.request_confirmation(prompt, Action::Goto(GotoTarget::Global(lat, lon, alt, yaw)));
     }
 
     pub(crate) fn load_kml(&mut self, text: &str) {
@@ -485,49 +430,6 @@ impl App {
             Ok(plan) => self.confirm_queue(plan),
             Err(e) => state::lock(&self.shared).error(e),
         }
-    }
-
-    /// [P]: ask the ROS node to publish the vehicle position once.
-    fn request_gps_publish(&mut self) {
-        let valid = state::lock(&self.shared).global_pos_valid;
-        let mut ros = lock(&self.ros);
-        let failure = if !ros.available {
-            Some(format!("GPS publish: {}", ros.error))
-        } else if !valid {
-            Some("GPS publish: no global position yet (need a GPS fix)".to_string())
-        } else {
-            None
-        };
-        drop(ros);
-        match failure {
-            Some(msg) => {
-                state::lock(&self.shared).warn(&msg);
-                crate::ros::set_feedback(&self.ros, msg, false);
-            }
-            None => {
-                crate::ros::set_feedback(&self.ros, format!("publishing to {GPS_PUBLISH_TOPIC} ..."), true);
-                ros = lock(&self.ros);
-                ros.gps_publish_requested = true;
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------
-    // ROS topics
-    // -----------------------------------------------------------------
-
-    fn normalize_topic(text: &str) -> String {
-        let t = text.trim();
-        if t.is_empty() || t.starts_with('/') { t.to_string() } else { format!("/{t}") }
-    }
-
-    pub(crate) fn lidar_topic_submit(&mut self, text: &str) {
-        let topic = Self::normalize_topic(text);
-        if topic.is_empty() {
-            return;
-        }
-        lock(&self.ros).lidar_topic = topic.clone();
-        state::lock(&self.shared).command(format!("Point-cloud topic changed to {topic}"));
     }
 
     // -----------------------------------------------------------------
