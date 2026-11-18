@@ -133,6 +133,10 @@ pub enum Action {
     Winch(crate::mav::payload::WinchAction),
     /// 0-based output, -1..1, and optionally (seconds, then).
     Actuator(usize, f32, Option<(f64, f32)>),
+    /// [l] delete these downloaded .ulg files.
+    DeleteLocalLogs(Vec<std::path::PathBuf>),
+    /// [l] LOG_ERASE: every log on the vehicle.
+    EraseVehicleLogs,
     /// Quit while the REC pane is recording: stop it first.
     QuitRecording,
 }
@@ -312,6 +316,8 @@ pub struct App {
     /// [e] RECORD pane: recorders and the open run.
     pub rec: crate::record::Recording,
     pub(crate) rec_jobs: crate::app_record::RecJobs,
+    /// [l] FLIGHT LOGS: marked logs and the queued downloads / uploads.
+    pub(crate) log_batch: crate::app_logs::LogBatch,
     /// [w] ROS pane: its node (rosout, publishes, calls) and the view.
     pub ros_console: crate::rospane::Console,
     pub ros_pane: crate::rospane::RosPane,
@@ -475,6 +481,7 @@ impl App {
             review: Default::default(),
             rec,
             rec_jobs: Default::default(),
+            log_batch: Default::default(),
             ros_console,
             ros_pane,
             ros_console_thread,
@@ -571,6 +578,7 @@ impl App {
         drop(st);
         self.review_poll();
         self.rec_tick();
+        self.log_batch_tick();
         self.ros_pane_tick();
         let mut st = state::lock(&self.shared);
         if self.session.screen == Screen::Payload {
@@ -888,6 +896,8 @@ impl App {
             Action::FlashFirmware(fw, port) => {
                 crate::jobs::start_firmware_flash(&self.jobs, shared, &self.settings.tools_dir, &fw, &port);
             }
+            Action::DeleteLocalLogs(paths) => self.delete_local_logs(paths),
+            Action::EraseVehicleLogs => self.erase_vehicle_logs(),
             Action::EkfReset => {
                 if !self.ensure_shell() {
                     state::lock(shared).error("Could not open MAVLink shell for EKF reset");
@@ -1573,6 +1583,12 @@ impl App {
             return;
         }
 
+        if key == "x" && self.log_batch.busy() {
+            drop(st);
+            self.clear_log_batch();
+            return;
+        }
+
         let i = &mut self.session.flight_log_index;
         match key {
             "l" => self.session.screen = Screen::Dashboard,
@@ -1584,9 +1600,31 @@ impl App {
                 let allow = self.settings.allow_log_download_while_armed;
                 flightlog::request_flight_logs(&self.link, &mut st, allow);
                 self.session.flight_log_index = 0;
+                self.log_batch.selected.clear();
             }
-            // Both act on the last *completed* download, not the cursor row:
-            // the point is to inspect a log already pulled off the vehicle.
+            " " => {
+                drop(st);
+                self.toggle_log_selection();
+            }
+            "*" => {
+                drop(st);
+                self.toggle_all_logs();
+            }
+            "d" | "DELETE" if count > 0 => {
+                drop(st);
+                self.confirm_delete_local_logs();
+            }
+            "E" => {
+                drop(st);
+                self.confirm_erase_vehicle_logs();
+            }
+            "u" if !self.log_batch.selected.is_empty() => {
+                drop(st);
+                self.upload_marked_logs();
+            }
+            // Without marks these act on the last *completed* download, not
+            // the cursor row: the point is to inspect a log already pulled
+            // off the vehicle.
             "u" | "a" => {
                 let path = (st.dl_status == "COMPLETE" && std::path::Path::new(&st.dl_path).is_file()).then(|| st.dl_path.clone());
                 drop(st);
@@ -1604,16 +1642,8 @@ impl App {
             "HOME" => *i = 0,
             "END" if count > 0 => *i = count - 1,
             "ENTER" if count > 0 => {
-                let entry = st.flight_logs_sorted()[(*i).min(count - 1)].clone();
                 drop(st);
-                flightlog::start_download(
-                    self.link.clone(),
-                    self.shared.clone(),
-                    self.log_rx.clone(),
-                    entry,
-                    self.settings.log_dir.clone(),
-                    self.settings.allow_log_download_while_armed,
-                );
+                self.download_logs();
             }
             _ => {}
         }

@@ -328,7 +328,7 @@ fn build_screen(ctx: &Ctx, screen: Screen) -> (Vec<Line<'static>>, String) {
         Screen::Log => (lists::event_log(ctx), "↑↓ scroll · PGUP/PGDN page · [c] clear · / search · [g] back".into()),
         Screen::FlightLogs => (
             lists::flight_logs(ctx),
-            "ENTER download · [v] review last · [u] upload last to web · [a] EKF check · [r] refresh · ESC/x cancel · [l] back".into(),
+            "SPACE mark · * all · ENTER download · [u] upload · [d] delete local · [E] erase vehicle · [v] review · [a] EKF · [r] refresh · x cancel · [l] back".into(),
         ),
         Screen::Review => (
             Vec::new(),

@@ -376,8 +376,19 @@ pub fn flight_logs(ctx: &Ctx) -> Vec<Line<'static>> {
         };
         lines.push(Ln::new().raw(" [").fg("█".repeat(filled), GREEN).dim("░".repeat(width - filled)).raw("]").line());
     }
-    lines.push(blank());
-    lines.push(Ln::new().dim(format!("    {:<8}{:<26}{:>12}", "ID", "DATE", "SIZE")).line());
+    // Batch queue / marks.
+    let batch = &ctx.app.log_batch;
+    let mut info = Ln::new();
+    if !batch.selected.is_empty() {
+        info = info.fg(format!(" {} marked", batch.selected.len()), CYAN);
+    }
+    if batch.busy() {
+        let dls = batch.downloads.len() + usize::from(batch.current.is_some());
+        let ups = batch.uploads.len() + batch.upload_after.len() + usize::from(batch.uploading.is_some());
+        info = info.fg(format!("   queue: {dls} download(s), {ups} upload(s)  [x] drop queue"), YELLOW);
+    }
+    lines.push(info.line());
+    lines.push(Ln::new().dim(format!("      {:<8}{:<26}{:>12}  {}", "ID", "DATE", "SIZE", "LOCAL")).line());
 
     // Upload / EKF-check job status goes below the list, rows reserved.
     let mut jobs = super::hostui::job_panel(ctx, crate::jobs::JobKind::UlogUpload);
@@ -396,14 +407,19 @@ pub fn flight_logs(ctx: &Ctx) -> Vec<Line<'static>> {
     let cursor = session.flight_log_index.min(count - 1);
     let height = ctx.height.saturating_sub(lines.len() + jobs.len()).max(1);
     let start = window_start(cursor, count, height);
+    let log_dir = &ctx.app.settings.log_dir;
     for (i, e) in st.flight_logs_sorted().into_iter().enumerate().skip(start).take(height) {
         let selected = i == cursor;
         let style = if selected { selected_style() } else { Style::new() };
+        let marked = batch.selected.contains(&e.id);
         let row = format!("{:06}  {:<26}{:>12}", e.id, e.time_string(), e.size_string());
+        let local = if crate::app_logs::downloaded(log_dir, e) { Ln::new().fg("  ✓", GREEN) } else { Ln::new() };
         lines.push(
             Ln::new()
                 .st(if selected { "  > " } else { "    " }, style)
+                .st(if marked { "● " } else { "  " }, style.fg(CYAN))
                 .spans(highlight(&row, query, style))
+                .spans(local.0)
                 .line(),
         );
     }

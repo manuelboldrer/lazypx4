@@ -5,6 +5,7 @@
 
 mod app;
 mod app_cmd;
+mod app_logs;
 mod app_map;
 mod app_payload;
 mod app_record;
