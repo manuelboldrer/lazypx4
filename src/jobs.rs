@@ -270,8 +270,9 @@ pub(crate) fn copy_to_clipboard(text: &str) -> bool {
 }
 
 /// Upload a .ulg to a Flight Review v2 server (`POST <server>/api/upload`)
-/// with curl, then copy the log's page URL (`<server>/log/<id>`).
-pub fn start_ulog_upload(jobs: &Jobs, shared: &Shared, server: &str, log: &Path) -> bool {
+/// with curl, then copy the log's page URL (`<server>/log/<id>`) and save it
+/// under `links_dir`.
+pub fn start_ulog_upload(jobs: &Jobs, shared: &Shared, server: &str, log: &Path, links_dir: &Path) -> bool {
     let mut file_arg = std::ffi::OsString::from("file=@");
     file_arg.push(log);
     let mut cmd = Command::new("curl");
@@ -282,6 +283,7 @@ pub fn start_ulog_upload(jobs: &Jobs, shared: &Shared, server: &str, log: &Path)
         .arg(format!("{server}/api/upload"));
 
     let base = server.to_string();
+    let (log_path, links_dir) = (log.to_path_buf(), links_dir.to_path_buf());
     let on_success: OnSuccess = Box::new(move |output, shared| {
         let reply: serde_json::Value = output
             .lines()
@@ -295,13 +297,41 @@ pub fn start_ulog_upload(jobs: &Jobs, shared: &Shared, server: &str, log: &Path)
         } else {
             st.warn("Could not copy the URL to the clipboard (wl-copy / xclip)");
         }
-        if let Some(token) = reply["delete_token"].as_str() {
+        let token = reply["delete_token"].as_str();
+        if let Some(token) = token {
             st.info(format!("Delete token for {id}: {token}"));
+        }
+        match save_review_link(&links_dir, &log_path, &url, token) {
+            Ok(file) => st.info(format!("Flight Review link saved to {}", file.display())),
+            Err(e) => st.warn(format!("Could not save the Flight Review link in {}: {e}", links_dir.display())),
         }
         Ok(url)
     });
     let name = log.file_name().unwrap_or_default().to_string_lossy();
     start(jobs, shared, JobKind::UlogUpload, cmd, format!("Uploading {name} to {server}"), Some(on_success))
+}
+
+/// `<links_dir>/<log name>.txt` (URL, log, delete token) plus a line in
+/// `<links_dir>/flight_review_links.csv`. Returns the .txt path.
+fn save_review_link(links_dir: &Path, log: &Path, url: &str, token: Option<&str>) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    std::fs::create_dir_all(links_dir)?;
+    let stem = log.file_stem().unwrap_or_default().to_string_lossy();
+    let log_abs = std::fs::canonicalize(log).unwrap_or_else(|_| log.to_path_buf());
+    let time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let token = token.unwrap_or("");
+
+    let file = links_dir.join(format!("{stem}.txt"));
+    std::fs::write(&file, format!("url: {url}\nlog: {}\nuploaded: {time}\ndelete_token: {token}\n", log_abs.display()))?;
+
+    let index = links_dir.join("flight_review_links.csv");
+    let new = !index.exists();
+    let mut csv = std::fs::OpenOptions::new().create(true).append(true).open(index)?;
+    if new {
+        writeln!(csv, "uploaded,log,url,delete_token")?;
+    }
+    writeln!(csv, "{time},{},{url},{token}", log_abs.display())?;
+    Ok(file)
 }
 
 pub fn start_ecl_ekf_check(jobs: &Jobs, shared: &Shared, tools_dir: &str, log: &Path) -> bool {

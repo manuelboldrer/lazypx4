@@ -267,7 +267,7 @@ impl App {
             && !crate::jobs::running(&self.jobs)
             && self.rec_jobs.uploading.is_none()
             && let Some(path) = self.log_batch.uploads.pop_front()
-            && crate::jobs::start_ulog_upload(&self.jobs, &self.shared, &self.settings.ulog_upload_server, &path)
+            && crate::jobs::start_ulog_upload(&self.jobs, &self.shared, &self.settings.ulog_upload_server, &path, &self.review_links_dir())
         {
             self.log_batch.uploading = Some(path);
         }

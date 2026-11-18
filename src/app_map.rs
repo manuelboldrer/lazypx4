@@ -515,7 +515,7 @@ impl App {
         let path = std::path::Path::new(&path);
         let tools = &self.settings.tools_dir;
         if upload {
-            crate::jobs::start_ulog_upload(&self.jobs, &self.shared, &self.settings.ulog_upload_server, path);
+            crate::jobs::start_ulog_upload(&self.jobs, &self.shared, &self.settings.ulog_upload_server, path, &self.review_links_dir());
         } else {
             crate::jobs::start_ecl_ekf_check(&self.jobs, &self.shared, tools, path);
         }

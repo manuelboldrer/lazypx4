@@ -237,6 +237,12 @@ impl App {
         if dir.is_absolute() { dir } else { std::env::current_dir().map(|c| c.join(&dir)).unwrap_or(dir) }
     }
 
+    /// Where Flight Review links are saved: `px4_review` next to the log folder.
+    pub(crate) fn review_links_dir(&self) -> PathBuf {
+        let logs = self.review_dir();
+        logs.parent().map(|p| p.join("px4_review")).unwrap_or_else(|| PathBuf::from("px4_review"))
+    }
+
     /// Opening the screen: list the downloaded logs.
     pub(crate) fn review_opened(&mut self) {
         if self.review.log.is_none() {

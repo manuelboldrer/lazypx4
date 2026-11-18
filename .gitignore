@@ -26,6 +26,7 @@ venv/
 px4_logs/
 px4_maps/
 px4_tlogs/
+px4_review/
 
 # tests
 tests/

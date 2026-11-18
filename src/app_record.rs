@@ -400,7 +400,7 @@ impl App {
             state::lock(&self.shared).warn("REC: no .ulg to upload - [p] downloads the newest PX4 log first");
             return;
         };
-        if crate::jobs::start_ulog_upload(&self.jobs, &self.shared, &self.settings.ulog_upload_server, &ulog) {
+        if crate::jobs::start_ulog_upload(&self.jobs, &self.shared, &self.settings.ulog_upload_server, &ulog, &self.review_links_dir()) {
             self.rec_jobs.uploading = Some(ulog);
         }
     }
