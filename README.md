@@ -37,13 +37,18 @@ changes the drone's state asks you to type `YES` first.
 
 ## Install
 
-You need [Rust](https://rustup.rs).
-
 ```bash
 git clone https://github.com/manuelboldrer/lazypx4.git
 cd lazypx4
 install/install.sh
 ```
+
+On Debian / Ubuntu the script lists the system packages that are missing
+(the build tools, plus the optional helpers lazypx4 calls: tmux, ping, iw,
+lm-sensors, ffmpeg / wf-recorder, speech-dispatcher, clipboard tools) and
+asks before installing them with `sudo apt`. If Rust is missing it asks
+before installing it with rustup. `--yes` skips the questions, `--no-deps`
+skips the dependency step and only builds.
 
 For ROS 2 support, run `source /opt/ros/jazzy/setup.bash` and then
 `install/install.sh --ros`.

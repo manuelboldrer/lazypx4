@@ -58,6 +58,13 @@
 # cmd = "journalctl -f -o short-precise"
 # enabled = false                   # listed, but not part of [R]
 
+[flash]
+# [f] over a companion UART (ttyTHS* / ttyAMA*) instead of USB. lazypx4 reboots
+# PX4 into its bootloader over MAVLink, then px_uploader flashes over the UART.
+# Pixhawk 6X: the bootloader listens on TELEM2 (UART5) at 1500000.
+# baud_bootloader = 1500000
+# baud_flightstack = "57600,921600" # px_uploader's own reboot attempt on the UART
+
 [upload]
 # server = "https://v2.logs.px4.io" # Flight Review v2 server [u] uploads .ulg logs to
 

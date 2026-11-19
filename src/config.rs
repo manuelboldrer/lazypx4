@@ -28,6 +28,10 @@ pub struct Settings {
     pub firmware_dir: String,
     /// px_uploader.py / ecl_ekf live here.
     pub tools_dir: String,
+    /// [f] over a companion UART (ttyTHS* / ttyAMA*): bootloader baud, and
+    /// the flight-stack baud(s) px_uploader tries its own reboot at.
+    pub flash_baud_bootloader: u32,
+    pub flash_baud_flightstack: String,
     /// Flight Review v2 server [u] uploads .ulg logs to.
     pub ulog_upload_server: String,
     /// .kml to load as the map overlay at start-up (like pressing [o]).
@@ -75,6 +79,7 @@ pub struct FileConfig {
     pub alerts: AlertsFile,
     pub fleet: FleetFile,
     pub upload: UploadFile,
+    pub flash: FlashFile,
     /// The [e] RECORD pane.
     pub record: crate::record::RecordConfig,
     /// heading -> parameter names, in file order.
@@ -130,6 +135,16 @@ pub struct UploadFile {
     pub server: Option<String>,
 }
 
+/// [f] flashing over a companion UART instead of USB.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FlashFile {
+    /// Baud the FC bootloader listens at on its serial interface.
+    pub baud_bootloader: Option<u32>,
+    /// Comma-separated MAVLink baud(s) of that UART, for px_uploader's reboot.
+    pub baud_flightstack: Option<String>,
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AlertsFile {
@@ -141,6 +156,9 @@ pub struct AlertsFile {
 pub use crate::record::RecordConfig;
 
 pub const DEFAULT_ALERT_REPEAT: u32 = 5;
+/// Pixhawk 6X (FMUv6X) bootloader: UART5 = TELEM2 at 1.5 Mbaud.
+pub const DEFAULT_FLASH_BAUD_BOOTLOADER: u32 = 1_500_000;
+pub const DEFAULT_FLASH_BAUD_FLIGHTSTACK: &str = "57600,921600";
 
 /// KEY PARAMETERS panel columns of (heading, parameter names).
 pub type KeyParamColumns = Vec<Vec<(String, Vec<String>)>>;

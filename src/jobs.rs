@@ -217,11 +217,23 @@ pub fn discover_firmware_files(dir: &str) -> Vec<PathBuf> {
     files.into_iter().map(|(_, p)| p).collect()
 }
 
-/// USB serial ports a flight controller could be on (never a PC's onboard
-/// /dev/ttyS* UARTs).
+/// Companion-computer UARTs wired to the FC (Jetson ttyTHS*, Raspberry Pi
+/// ttyAMA*); flashing over one goes through the bootloader's serial port.
+const UART_PREFIXES: [&str; 2] = ["ttyTHS", "ttyAMA"];
+
+pub fn is_uart_port(port: &str) -> bool {
+    let name = port.rsplit('/').next().unwrap_or(port);
+    UART_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// Ports a flight controller could be on: USB serial first, then companion
+/// UARTs (never a PC's generic /dev/ttyS* UARTs).
 pub fn discover_serial_ports() -> Vec<String> {
     let mut ports: Vec<String> = Vec::new();
-    for (dir, prefixes) in [("/dev/serial/by-id", &[""][..]), ("/dev", &["ttyACM", "ttyUSB"][..])] {
+    for (dir, prefixes) in [
+        ("/dev/serial/by-id", &[""][..]),
+        ("/dev", &["ttyACM", "ttyUSB", UART_PREFIXES[0], UART_PREFIXES[1]][..]),
+    ] {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for e in entries.filter_map(Result::ok) {
                 let name = e.file_name().to_string_lossy().into_owned();
@@ -231,19 +243,30 @@ pub fn discover_serial_ports() -> Vec<String> {
             }
         }
     }
-    ports.sort();
+    ports.sort_by(|a, b| (is_uart_port(a), a).cmp(&(is_uart_port(b), b)));
     ports.dedup();
     ports
 }
 
-pub fn start_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmware: &Path, port: &str) -> bool {
+/// Baud rates for flashing over a true serial port (ignored over USB).
+pub struct FlashBauds<'a> {
+    pub bootloader: u32,
+    pub flightstack: &'a str,
+}
+
+pub fn start_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmware: &Path, port: &str, bauds: &FlashBauds) -> bool {
     let uploader = Path::new(tools_dir).join("px_uploader.py");
     if !uploader.is_file() {
         state::lock(shared).error(format!("px_uploader.py not found under {tools_dir}"));
         return false;
     }
     let mut cmd = Command::new(tool_python(tools_dir));
-    cmd.arg(&uploader).arg("--port").arg(port).arg(firmware);
+    cmd.arg(&uploader).arg("--port").arg(port);
+    if is_uart_port(port) {
+        cmd.arg("--baud-bootloader").arg(bauds.bootloader.to_string());
+        cmd.arg("--baud-flightstack").arg(bauds.flightstack);
+    }
+    cmd.arg(firmware);
     let name = firmware.file_name().unwrap_or_default().to_string_lossy();
     start(jobs, shared, JobKind::Firmware, cmd, format!("Firmware flash ({name} -> {port})"), None)
 }

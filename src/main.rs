@@ -210,6 +210,8 @@ fn main() -> std::process::ExitCode {
         disk_path: pick(cli.disk_path, paths.disk_path, "/"),
         firmware_dir: pick(cli.firmware_dir, paths.firmware_dir, "./px4_firmware"),
         tools_dir: cli.tools_dir.or(paths.tools_dir).unwrap_or_else(default_tools_dir),
+        flash_baud_bootloader: file.flash.baud_bootloader.unwrap_or(config::DEFAULT_FLASH_BAUD_BOOTLOADER),
+        flash_baud_flightstack: file.flash.baud_flightstack.unwrap_or_else(|| config::DEFAULT_FLASH_BAUD_FLIGHTSTACK.into()),
         ulog_upload_server: pick(cli.upload_server, file.upload.server, "https://v2.logs.px4.io")
             .trim_end_matches('/')
             .to_string(),

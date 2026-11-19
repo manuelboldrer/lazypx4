@@ -485,7 +485,7 @@ impl App {
                     return st.warn(format!("No .px4 firmware files found in {}", self.settings.firmware_dir));
                 }
                 if np == 0 {
-                    return st.warn("No serial ports detected - plug in the flight controller via USB");
+                    return st.warn("No flight-controller port found (USB ttyACM*/ttyUSB* or companion UART ttyTHS*/ttyAMA*)");
                 }
                 if st.armed {
                     return st.warn("Refusing to flash firmware while the vehicle is ARMED");

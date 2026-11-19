@@ -257,10 +257,18 @@ pub fn firmware(ctx: &Ctx) -> Vec<Line<'static>> {
     let mut lines = vec![
         Ln::new().raw(" Target port: ").spans(port.0).line(),
         Line::from(format!(" Firmware directory: {}", ctx.app.settings.firmware_dir)),
+    ];
+    if s.firmware_ports.get(s.firmware_port_index.min(s.firmware_ports.len().saturating_sub(1))).is_some_and(|p| crate::jobs::is_uart_port(p)) {
+        lines.push(Ln::new().dim(format!(
+            " UART: reboots PX4 into its bootloader over MAVLink, then flashes at {} baud (lazypx4.toml [flash])",
+            ctx.app.settings.flash_baud_bootloader
+        )).line());
+    }
+    lines.extend([
         blank(),
         Ln::new().dim(format!(" {:>3} {:<40} {:>10}  {:<20}", "", "FILE", "SIZE", "MODIFIED")).line(),
         Ln::new().dim(format!(" {}", "─".repeat(74))).line(),
-    ];
+    ]);
     if s.firmware_files.is_empty() {
         lines.push(Ln::new().dim(format!(" No .px4 firmware files found in {}", ctx.app.settings.firmware_dir)).line());
     }
