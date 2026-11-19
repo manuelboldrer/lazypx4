@@ -59,11 +59,13 @@
 # enabled = false                   # listed, but not part of [R]
 
 [flash]
-# [f] over a companion UART (ttyTHS* / ttyAMA*) instead of USB. lazypx4 reboots
-# PX4 into its bootloader over MAVLink, then px_uploader flashes over the UART.
-# Pixhawk 6X: the bootloader listens on TELEM2 (UART5) at 1500000.
+# [f] over a companion UART (ttyTHS* / ttyAMA*) instead of USB. lazypx4 first
+# listens for a PX4 MAVLink heartbeat on that UART and refuses without one; then
+# px_uploader reboots PX4 into its bootloader over the UART and flashes it.
+# The bootloader must listen on that FC port (Pixhawk 6X: TELEM2 = UART5 at
+# 1500000), or the FC stays in the bootloader until power-cycled. USB is safer.
 # baud_bootloader = 1500000
-# baud_flightstack = "57600,921600" # px_uploader's own reboot attempt on the UART
+# baud_flightstack = "57600,921600" # MAVLink baud(s) of PX4 on that UART
 
 [upload]
 # server = "https://v2.logs.px4.io" # Flight Review v2 server [u] uploads .ulg logs to

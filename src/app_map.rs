@@ -494,8 +494,13 @@ impl App {
                 let fw = s.firmware_files[s.firmware_index.min(nf - 1)].clone();
                 let port = s.firmware_ports[s.firmware_port_index.min(np - 1)].clone();
                 let name = fw.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let uart = if crate::jobs::is_uart_port(&port) {
+                    " Over a UART: if its bootloader doesn't answer there, the FC stays stuck until power-cycled."
+                } else {
+                    ""
+                };
                 self.request_confirmation(
-                    format!("FLASH {name} to {port}? This reboots the flight controller. Type YES"),
+                    format!("FLASH {name} to {port}? This reboots the flight controller.{uart} Type YES"),
                     Action::FlashFirmware(fw, port),
                 );
             }

@@ -27,6 +27,7 @@ mod record;
 mod ros;
 mod rospane;
 mod tlog;
+mod uartprobe;
 mod satellite;
 mod state;
 mod suspend;

@@ -249,9 +249,40 @@ pub fn discover_serial_ports() -> Vec<String> {
 }
 
 /// Baud rates for flashing over a true serial port (ignored over USB).
-pub struct FlashBauds<'a> {
+pub struct FlashBauds {
     pub bootloader: u32,
-    pub flightstack: &'a str,
+    /// Comma-separated; px_uploader sends its reboot-to-bootloader at these.
+    pub flightstack: String,
+}
+
+/// Parse "57600,921600" into bauds, skipping junk.
+pub fn parse_bauds(list: &str) -> Vec<u32> {
+    list.split(',').filter_map(|b| b.trim().parse().ok()).collect()
+}
+
+/// [f] over a companion UART. px_uploader reboots PX4 into its bootloader
+/// through the UART itself, and that bootloader then waits forever for a
+/// host, so first make sure PX4 is really on the other end: listen for its
+/// HEARTBEAT, and refuse to flash without one. Runs off the UI thread.
+pub fn start_uart_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmware: &Path, port: &str, bauds: FlashBauds) {
+    let (jobs, shared) = (jobs.clone(), shared.clone());
+    let (tools_dir, firmware, port) = (tools_dir.to_string(), firmware.to_path_buf(), port.to_string());
+    state::lock(&shared).info(format!("Checking {port} for a PX4 heartbeat before flashing..."));
+    std::thread::spawn(move || {
+        let candidates = parse_bauds(&bauds.flightstack);
+        match crate::uartprobe::find_heartbeat_baud(&port, &candidates, std::time::Duration::from_millis(2500)) {
+            Ok(baud) => {
+                state::lock(&shared).info(format!("PX4 heartbeat on {port} at {baud} baud"));
+                let bauds = FlashBauds { bootloader: bauds.bootloader, flightstack: baud.to_string() };
+                start_firmware_flash(&jobs, &shared, &tools_dir, &firmware, &port, &bauds);
+            }
+            Err(e) => state::lock(&shared).error(format!(
+                "Not flashing: {e}. Without it the FC can't be confirmed on this UART, and a \
+                 reboot into the bootloader there could leave it stuck until power-cycled. \
+                 Check the wiring / MAVLink on that port, or flash over USB."
+            )),
+        }
+    });
 }
 
 pub fn start_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmware: &Path, port: &str, bauds: &FlashBauds) -> bool {
@@ -264,7 +295,7 @@ pub fn start_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmw
     cmd.arg(&uploader).arg("--port").arg(port);
     if is_uart_port(port) {
         cmd.arg("--baud-bootloader").arg(bauds.bootloader.to_string());
-        cmd.arg("--baud-flightstack").arg(bauds.flightstack);
+        cmd.arg("--baud-flightstack").arg(&bauds.flightstack);
     }
     cmd.arg(firmware);
     let name = firmware.file_name().unwrap_or_default().to_string_lossy();

@@ -238,16 +238,6 @@ pub fn send_reboot(link: &Link, shared: &Shared) -> bool {
     sent
 }
 
-/// Reboot PX4 into its bootloader (param1 = 3), so px_uploader can flash it
-/// over a UART whose flight-stack side may not speak MAVLink.
-pub fn send_reboot_to_bootloader(link: &Link, shared: &Shared) -> bool {
-    simple_command(
-        link, shared,
-        MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, [3., 0., 0., 0., 0., 0., 0.],
-        "PX4 REBOOT TO BOOTLOADER command SENT", "Failed to send reboot-to-bootloader",
-    )
-}
-
 pub fn send_rtl(link: &Link, shared: &Shared) -> bool {
     simple_command(
         link, shared,

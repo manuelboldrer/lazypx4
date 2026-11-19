@@ -260,7 +260,7 @@ pub fn firmware(ctx: &Ctx) -> Vec<Line<'static>> {
     ];
     if s.firmware_ports.get(s.firmware_port_index.min(s.firmware_ports.len().saturating_sub(1))).is_some_and(|p| crate::jobs::is_uart_port(p)) {
         lines.push(Ln::new().dim(format!(
-            " UART: reboots PX4 into its bootloader over MAVLink, then flashes at {} baud (lazypx4.toml [flash])",
+            " UART: needs a PX4 heartbeat on this port first, then flashes at {} baud (lazypx4.toml [flash])",
             ctx.app.settings.flash_baud_bootloader
         )).line());
     }

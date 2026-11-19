@@ -894,17 +894,15 @@ impl App {
                 crate::mav::payload::send_actuator(link, shared, index, value, timer);
             }
             Action::FlashFirmware(fw, port) => {
-                // Over a UART the bootloader only answers once PX4 has rebooted
-                // into it; ask over the MAVLink link we already have. Without a
-                // link px_uploader still tries its own reboot on the UART.
-                if crate::jobs::is_uart_port(&port) && link.has_peer() {
-                    crate::mav::commands::send_reboot_to_bootloader(link, shared);
-                }
                 let bauds = crate::jobs::FlashBauds {
                     bootloader: self.settings.flash_baud_bootloader,
-                    flightstack: &self.settings.flash_baud_flightstack,
+                    flightstack: self.settings.flash_baud_flightstack.clone(),
                 };
-                crate::jobs::start_firmware_flash(&self.jobs, shared, &self.settings.tools_dir, &fw, &port, &bauds);
+                if crate::jobs::is_uart_port(&port) {
+                    crate::jobs::start_uart_firmware_flash(&self.jobs, shared, &self.settings.tools_dir, &fw, &port, bauds);
+                } else {
+                    crate::jobs::start_firmware_flash(&self.jobs, shared, &self.settings.tools_dir, &fw, &port, &bauds);
+                }
             }
             Action::DeleteLocalLogs(paths) => self.delete_local_logs(paths),
             Action::EraseVehicleLogs => self.erase_vehicle_logs(),
