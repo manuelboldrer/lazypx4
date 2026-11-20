@@ -285,6 +285,20 @@ pub fn start_uart_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, 
     });
 }
 
+/// The /dev/serial/by-id name changes when PX4 reboots into its bootloader
+/// (`..._PX4_FMU_v6X.x_0-if00` -> `..._PX4_BL_FMU_v6X.x_0-if00`), so the path
+/// picked while PX4 runs is gone by the time px_uploader looks for the
+/// bootloader. Hand it a glob (it expands comma-separated patterns) matching
+/// both names, plus the original path.
+fn uploader_port_pattern(port: &str) -> String {
+    if port.starts_with("/dev/serial/by-id/") && port.contains("PX4_") {
+        let glob = port.replace("PX4_BL_", "PX4_").replacen("PX4_", "PX4_*", 1);
+        format!("{glob},{port}")
+    } else {
+        port.to_string()
+    }
+}
+
 pub fn start_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmware: &Path, port: &str, bauds: &FlashBauds) -> bool {
     let uploader = Path::new(tools_dir).join("px_uploader.py");
     if !uploader.is_file() {
@@ -292,7 +306,7 @@ pub fn start_firmware_flash(jobs: &Jobs, shared: &Shared, tools_dir: &str, firmw
         return false;
     }
     let mut cmd = Command::new(tool_python(tools_dir));
-    cmd.arg(&uploader).arg("--port").arg(port);
+    cmd.arg(&uploader).arg("--port").arg(uploader_port_pattern(port));
     if is_uart_port(port) {
         cmd.arg("--baud-bootloader").arg(bauds.bootloader.to_string());
         cmd.arg("--baud-flightstack").arg(&bauds.flightstack);
