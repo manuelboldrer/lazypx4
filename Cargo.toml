@@ -21,6 +21,7 @@ libc = "0.2.189"
 # (AVAILABLE_MODES / CURRENT_MODE); extensions are needed for e.g.
 # GPS_RAW_INT.h_acc and BATTERY_STATUS.voltages_ext.
 mavlink = { version = "0.18.0", default-features = false, features = ["std", "dialect-development", "format-generated-code", "mav2-message-extensions"] }
+mavlink-tlog = "0.1.2"
 num-traits = "0.2"
 r2r = { version = "0.9.7", optional = true }
 ratatui = "0.30.2"
