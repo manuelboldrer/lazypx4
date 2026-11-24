@@ -62,6 +62,7 @@ fn screen_keys(screen: Screen) -> (Keys, bool) {
             ("arrows", "pan"),
             ("+ / - / 0", "zoom in / out / reset"),
             ("u / f", "follow vehicle / fit to KML"),
+            ("v / V / < >", "plan · 3D · 3D chase view / tilt 30-45-60° / rotate 45°"),
             ("t / c", "trail on/off / clear trail"),
             ("r", "re-request streams"),
             ("n", "back"),

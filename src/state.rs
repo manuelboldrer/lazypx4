@@ -104,6 +104,30 @@ pub fn size_string(value: u64) -> String {
     }
 }
 
+/// How the [n] mission map is drawn.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum MapView {
+    /// Top-down, North up, to scale.
+    #[default]
+    Plan,
+    /// Perspective from `map_tilt` above the horizon, looking toward `map_az`.
+    Tilted,
+    /// Perspective from behind the vehicle, looking along its heading.
+    Chase,
+}
+
+impl MapView {
+    /// The direction the camera looks toward, degrees from North.
+    pub fn azimuth(self, map_az: f64, yaw: f64) -> f64 {
+        match self {
+            MapView::Plan => 0.0,
+            MapView::Tilted => map_az,
+            MapView::Chase if yaw.is_finite() => yaw,
+            MapView::Chase => map_az,
+        }
+    }
+}
+
 /// One waypoint-queue / coverage target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
@@ -483,6 +507,13 @@ pub struct State {
     pub map_pan: (f64, f64),
     /// [u]: keep the view centred on the vehicle (pan is relative to it).
     pub map_follow: bool,
+    /// [v]: plan view, tilted 3D view, or 3D chase view behind the vehicle.
+    pub map_view: MapView,
+    /// Direction the tilted 3D camera looks toward, degrees from North
+    /// ([<]/[>] rotate it; the chase view uses the vehicle yaw instead).
+    pub map_az: f64,
+    /// [V]: 3D camera elevation above the horizon, degrees (90 = plan).
+    pub map_tilt: f64,
 
     /// KML overlay ([o]) - local visualization only until [O] uploads it.
     pub kml_path: String,
@@ -551,6 +582,7 @@ impl State {
             dl_status: "IDLE".into(),
             map_range: 30.0,
             map_follow: true,
+            map_tilt: 45.0,
             map_trail_enabled: true,
             fence_upload_status: "IDLE".into(),
             map_download_status: "IDLE".into(),

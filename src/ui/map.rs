@@ -22,7 +22,7 @@ use super::*;
 use crate::geo;
 use crate::kitty;
 use crate::satellite::SatImage;
-use crate::state::{Target, now};
+use crate::state::{MapView, Target, now};
 
 pub const BRAILLE_BITS: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
@@ -65,8 +65,73 @@ fn n_over_e(w: usize, h: usize) -> f64 {
 /// Background colour of the box (north, east, half-north, half-east) metres.
 type BgFn<'a> = &'a dyn Fn(f64, f64, f64, f64) -> Option<(u8, u8, u8)>;
 
+type V3 = [f64; 3];
+
+fn dot3(a: V3, b: V3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// Horizontal field of view of the 3D camera.
+const FOV_H_DEG: f64 = 60.0;
+
+/// A pinhole camera over the local N/E/Up frame, projecting onto the
+/// grid's Braille raster (2 x 4 square dots per cell).
+#[derive(Clone, Copy)]
+struct Camera {
+    pos: V3,
+    fwd: V3,
+    right: V3,
+    up: V3,
+    /// Focal length in dots, and the raster half-extents (cols, rows).
+    f: f64,
+    half: (f64, f64),
+    near: f64,
+}
+
+impl Camera {
+    /// Looking at `target` from `tilt_deg` above the horizon, toward
+    /// `az_deg` (from North), from far enough that `range` metres either
+    /// side of the target fill the width.
+    fn new(target: V3, range: f64, az_deg: f64, tilt_deg: f64, w: usize, h: usize) -> Self {
+        let (az, el) = (az_deg.to_radians(), tilt_deg.clamp(5.0, 89.0).to_radians());
+        let fwd = [el.cos() * az.cos(), el.cos() * az.sin(), -el.sin()];
+        let right = [-az.sin(), az.cos(), 0.0];
+        let up = [el.sin() * az.cos(), el.sin() * az.sin(), el.cos()];
+        let half = (w as f64, h as f64 * 2.0);
+        let tan = (FOV_H_DEG / 2.0).to_radians().tan();
+        let d = range / tan;
+        let pos = [target[0] - fwd[0] * d, target[1] - fwd[1] * d, target[2] - fwd[2] * d];
+        Camera { pos, fwd, right, up, f: half.0 / tan, half, near: d * 0.02 }
+    }
+
+    /// Raster dot (col, row) of a point, if it is in front of the camera.
+    fn project(&self, p: V3) -> Option<(f64, f64)> {
+        let v = [p[0] - self.pos[0], p[1] - self.pos[1], p[2] - self.pos[2]];
+        let z = dot3(v, self.fwd);
+        (z > self.near).then(|| (self.half.0 + self.f * dot3(v, self.right) / z, self.half.1 - self.f * dot3(v, self.up) / z))
+    }
+
+    /// Where the ray through raster dot (col, row) meets the ground (Up =
+    /// 0), and roughly how many metres one dot covers there.
+    fn ground_at(&self, col: f64, row: f64) -> Option<(f64, f64, f64)> {
+        let (x, y) = (col - self.half.0, self.half.1 - row);
+        let dir: V3 = std::array::from_fn(|i| self.fwd[i] * self.f + self.right[i] * x + self.up[i] * y);
+        let t = -self.pos[2] / dir[2];
+        if !(dir[2] < 0.0 && t > 0.0 && t.is_finite()) {
+            return None;
+        }
+        let len = dot3(dir, dir).sqrt();
+        // One dot across, stretched along the ground by the grazing angle.
+        let across = t * len / self.f;
+        let grazing = (-dir[2] / len).max(0.05);
+        Some((self.pos[0] + t * dir[0], self.pos[1] + t * dir[1], across / grazing.sqrt()))
+    }
+}
+
 /// A character grid over the local N/E plane, with Braille sub-cells.
 /// Drawn to scale: `range` is the East half-extent, `range_n` the North one.
+/// With a `cam` it is a perspective view instead (see [`Camera`]); points
+/// without a height are then on the ground.
 struct Grid {
     w: usize,
     h: usize,
@@ -74,15 +139,39 @@ struct Grid {
     center: (f64, f64),
     range: f64,
     range_n: f64,
+    cam: Option<Camera>,
 }
 
 impl Grid {
     fn new(w: usize, h: usize, center: (f64, f64), range: f64) -> Self {
         let range_n = range * n_over_e(w, h);
-        Grid { w, h, cells: vec![Cell { ch: ' ', style: Style::new(), layer: Layer::Empty }; w * h], center, range, range_n }
+        Grid { w, h, cells: vec![Cell { ch: ' ', style: Style::new(), layer: Layer::Empty }; w * h], center, range, range_n, cam: None }
+    }
+
+    fn with_camera(mut self, cam: Camera) -> Self {
+        self.cam = Some(cam);
+        self
+    }
+
+    /// Raster dot (col, row) of a point `u` metres up, unrounded.
+    fn dot3_f(&self, n: f64, e: f64, u: f64) -> Option<(f64, f64)> {
+        self.cam.and_then(|c| c.project([n, e, u])).filter(|(x, y)| {
+            x.is_finite() && y.is_finite() && *x >= 0.0 && *y >= 0.0 && *x < (self.w * 2) as f64 && *y < (self.h * 4) as f64
+        })
+    }
+
+    /// Cell of a point `u` metres up (the plan view ignores `u`).
+    fn cell_of3(&self, n: f64, e: f64, u: f64) -> Option<(usize, usize)> {
+        if self.cam.is_none() {
+            return self.cell_of(n, e);
+        }
+        self.dot3_f(n, e, u).map(|(x, y)| (y as usize / 4, x as usize / 2))
     }
 
     fn cell_of(&self, n: f64, e: f64) -> Option<(usize, usize)> {
+        if self.cam.is_some() {
+            return self.cell_of3(n, e, 0.0);
+        }
         let (hw, hh) = ((self.w / 2) as f64, (self.h / 2) as f64);
         let col = ((e - self.center.1) / self.range * hw).round() + hw;
         let row = hh - ((n - self.center.0) / self.range_n * hh).round();
@@ -104,8 +193,31 @@ impl Grid {
         self.put(n, e, ch, style, Layer::Marker, &[]);
     }
 
+    /// A marker `u` metres up (on the ground in the plan view).
+    fn marker3(&mut self, n: f64, e: f64, u: f64, ch: char, style: Style) {
+        if let Some((r, c)) = self.cell_of3(n, e, u) {
+            self.cells[r * self.w + c] = Cell { ch, style, layer: Layer::Marker };
+        }
+    }
+
+    /// Text starting at cell (r, c), clipped to the grid, over `only_over`.
+    fn label(&mut self, r: usize, c: usize, text: &str, style: Style, only_over: &[Layer]) {
+        for (i, ch) in text.chars().enumerate() {
+            if c + i >= self.w || r >= self.h {
+                break;
+            }
+            let cell = &mut self.cells[r * self.w + c + i];
+            if only_over.contains(&cell.layer) {
+                *cell = Cell { ch, style, layer: Layer::Marker };
+            }
+        }
+    }
+
     /// Dot position in the 2x4-per-cell Braille raster.
     fn dot_of(&self, n: f64, e: f64) -> Option<(usize, usize)> {
+        if self.cam.is_some() {
+            return self.dot3_f(n, e, 0.0).map(|(x, y)| (y as usize, x as usize));
+        }
         let (dw, dh) = ((self.w * 2) as f64, (self.h * 4) as f64);
         let col = ((e - self.center.1) / self.range * dw / 2.0).round() + dw / 2.0;
         let row = dh / 2.0 - ((n - self.center.0) / self.range_n * dh / 2.0).round();
@@ -127,16 +239,33 @@ impl Grid {
 
     /// Densely sample a polyline into Braille dots.
     fn braille_polyline(&self, pts: &[(f64, f64)]) -> HashMap<(usize, usize), (u8, f64)> {
-        let dot = (self.range / self.w.max(1) as f64).max(0.001);
-        let samples = pts.windows(2).flat_map(|seg| {
-            let ((an, ae), (bn, be)) = (seg[0], seg[1]);
-            let steps = ((bn - an).hypot(be - ae) / dot).clamp(1.0, 2000.0) as usize;
-            (0..=steps).map(move |i| {
+        let pts: Vec<V3> = pts.iter().map(|&(n, e)| [n, e, 0.0]).collect();
+        self.braille_polyline3(&pts)
+    }
+
+    /// Densely sample a polyline of (N, E, Up) points into Braille dots.
+    fn braille_polyline3(&self, pts: &[V3]) -> HashMap<(usize, usize), (u8, f64)> {
+        // Finer in perspective: the near side is magnified.
+        let dot = (self.range / self.w.max(1) as f64 / if self.cam.is_some() { 3.0 } else { 1.0 }).max(0.001);
+        let mut out: HashMap<(usize, usize), (u8, f64)> = HashMap::new();
+        for seg in pts.windows(2) {
+            let (a, b) = (seg[0], seg[1]);
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+            let steps = (len / dot).clamp(1.0, 4000.0) as usize;
+            for i in 0..=steps {
                 let t = i as f64 / steps as f64;
-                (an + (bn - an) * t, ae + (be - ae) * t, 0.0)
-            })
-        });
-        self.braille_points(samples)
+                let p: V3 = std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t);
+                let d = match self.cam {
+                    Some(_) => self.dot3_f(p[0], p[1], p[2]).map(|(x, y)| (y as usize, x as usize)),
+                    None => self.dot_of(p[0], p[1]),
+                };
+                if let Some((dr, dc)) = d {
+                    let entry = out.entry((dr / 4, dc / 2)).or_insert((0, 0.0));
+                    entry.0 |= BRAILLE_BITS[dc % 2][dr % 4];
+                }
+            }
+        }
+        out
     }
 
     fn paint_braille(&mut self, cells: HashMap<(usize, usize), (u8, f64)>, style: impl Fn(f64) -> Style, layer: Layer, only_over: &[Layer]) {
@@ -151,6 +280,10 @@ impl Grid {
     /// The block of cells lying entirely inside the snapshot, and the
     /// snapshot pixels behind it, for drawing the image itself under them.
     fn cover(&self, img: &SatImage, origin: (f64, f64)) -> Option<Cover> {
+        // A perspective view is no rectangle of the image.
+        if self.cam.is_some() {
+            return None;
+        }
         let (hw, hh) = ((self.w / 2) as f64, (self.h / 2) as f64);
         let (dn, de) = (self.range_n / hh.max(1.0), self.range / hw.max(1.0));
         // Outer edges of the grid (cells are centred on their n/e).
@@ -188,10 +321,17 @@ impl Grid {
                 let mut spans = vec![Span::raw("  ")];
                 spans.extend(row.iter().enumerate().map(|(c, cell)| {
                     let Some(bg) = bg else { return Span::styled(cell.ch.to_string(), cell.style) };
-                    let n = self.center.0 + (hh - r as f64) / hh * self.range_n;
-                    let e = self.center.1 + (c as f64 - hw) / hw * self.range;
-                    let top = bg(n + dn / 4.0, e, dn / 4.0, de / 2.0);
-                    let bot = bg(n - dn / 4.0, e, dn / 4.0, de / 2.0);
+                    let (top, bot) = match self.cam {
+                        Some(cam) => {
+                            let at = |row: f64| cam.ground_at((2 * c + 1) as f64, row).and_then(|(n, e, m)| bg(n, e, m, m));
+                            (at((4 * r + 1) as f64), at((4 * r + 3) as f64))
+                        }
+                        None => {
+                            let n = self.center.0 + (hh - r as f64) / hh * self.range_n;
+                            let e = self.center.1 + (c as f64 - hw) / hw * self.range;
+                            (bg(n + dn / 4.0, e, dn / 4.0, de / 2.0), bg(n - dn / 4.0, e, dn / 4.0, de / 2.0))
+                        }
+                    };
                     let covered = cover.is_some_and(|k| (k.rows.0..k.rows.1).contains(&r) && (k.cols.0..k.cols.1).contains(&c));
                     match (cell.layer, top, bot) {
                         (Layer::Empty, _, _) if covered => Span::styled(" ", Style::new().bg(Color::Reset)),
@@ -373,8 +513,51 @@ fn wrap_keys(keys: &[&str], width: usize, sep: &str) -> Vec<String> {
 const MAP_KEYS: &[&str] = &[
     "[g] goto", "[W] wp queue", "[C] coverage", "[x] jog", "[o] load kml",
     "[O] upload fence", "[+]/[-] zoom", "[arrows] pan", "[u] follow", "[0] reset", "[f] fit kml", "[t] trail", "[c] clear",
-    "[i] sat", "[I] sat on/off", "[n] back", "ESC panels",
+    "[v] plan/3D/chase", "[V] tilt", "[<]/[>] rotate", "[i] sat", "[I] sat on/off", "[n] back", "ESC panels",
 ];
+
+/// 1-2-5 spacing for the 3D ground grid: about two lines per half-range.
+fn grid_step(range: f64) -> f64 {
+    let raw = (range / 2.0).max(0.5);
+    let mag = 10f64.powf(raw.log10().floor());
+    [1.0, 2.0, 5.0, 10.0].into_iter().map(|m| m * mag).find(|s| *s >= raw).unwrap_or(10.0 * mag)
+}
+
+fn compass_point(az: f64) -> &'static str {
+    ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][((az.rem_euclid(360.0) / 45.0 + 0.5) as usize) % 8]
+}
+
+/// The 3D views' depth reference: a dim ground grid around the view
+/// centre, the origin's N/E axes brighter, and an `N` at the North end.
+fn ground_grid(grid: &mut Grid, center: (f64, f64), range: f64) {
+    let step = grid_step(range);
+    let ext = range * 3.0;
+    let (n0, n1) = (((center.0 - ext) / step).floor() as i64, ((center.0 + ext) / step).ceil() as i64);
+    let (e0, e1) = (((center.1 - ext) / step).floor() as i64, ((center.1 + ext) / step).ceil() as i64);
+    let (nlo, nhi, elo, ehi) = (n0 as f64 * step, n1 as f64 * step, e0 as f64 * step, e1 as f64 * step);
+    let dim = Style::new().fg(OVERLAY0).add_modifier(Modifier::DIM);
+    let mut lines: Vec<[V3; 2]> = Vec::new();
+    for i in n0..=n1 {
+        let n = i as f64 * step;
+        lines.push([[n, elo, 0.0], [n, ehi, 0.0]]);
+    }
+    for i in e0..=e1 {
+        let e = i as f64 * step;
+        lines.push([[nlo, e, 0.0], [nhi, e, 0.0]]);
+    }
+    for l in &lines {
+        let cells = grid.braille_polyline3(l);
+        grid.paint_braille(cells, |_| dim, Layer::Axis, &[Layer::Empty]);
+    }
+    // The origin axes, where they cross the grid.
+    for l in [[[0.0, elo, 0.0], [0.0, ehi, 0.0]], [[nlo, 0.0, 0.0], [nhi, 0.0, 0.0]]] {
+        if (nlo..=nhi).contains(&l[0][0]) || (elo..=ehi).contains(&l[0][1]) {
+            let cells = grid.braille_polyline3(&l);
+            grid.paint_braille(cells, |_| Style::new(), Layer::Axis, &[Layer::Empty, Layer::Axis]);
+        }
+    }
+    grid.marker3(nhi, center.1, 0.0, 'N', Style::new().fg(RED).add_modifier(Modifier::BOLD));
+}
 
 fn baseline_text(m: f64) -> String {
     if m <= 0.0 {
@@ -680,19 +863,33 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         ((0.0, 0.0), r.max(2.0))
     };
 
+    // Height above the local origin (the 3D views' ground plane).
+    let alt = if lz.is_finite() { -lz } else { 0.0 };
+    let view = st.map_view;
+    let az = view.azimuth(st.map_az, st.yaw);
+    let following = st.map_follow && !st.map_fit_kml;
     let mut grid = Grid::new(grid_w, grid_h, center, range);
+    if view != MapView::Plan {
+        // Following: orbit the vehicle itself; else a point on the ground.
+        let target_u = if following { alt.max(0.0) } else { 0.0 };
+        grid = grid.with_camera(Camera::new([center.0, center.1, target_u], range, az, st.map_tilt, grid_w, grid_h));
+    }
     let (hw, hh) = ((grid_w / 2) as f64, (grid_h / 2) as f64);
     let range_n = grid.range_n;
     let dim = Style::new().add_modifier(Modifier::DIM);
 
-    // Axes through the local origin.
-    for c in 0..grid_w {
-        grid.put(0.0, center.1 + (c as f64 - hw) / hw * range, '─', Style::new(), Layer::Axis, &[Layer::Empty]);
+    if view == MapView::Plan {
+        // Axes through the local origin.
+        for c in 0..grid_w {
+            grid.put(0.0, center.1 + (c as f64 - hw) / hw * range, '─', Style::new(), Layer::Axis, &[Layer::Empty]);
+        }
+        for r in 0..grid_h {
+            grid.put(center.0 + (hh - r as f64) / hh * range_n, 0.0, '│', Style::new(), Layer::Axis, &[Layer::Empty, Layer::Axis]);
+        }
+        grid.put(0.0, 0.0, '┼', Style::new(), Layer::Axis, &[]);
+    } else {
+        ground_grid(&mut grid, center, range);
     }
-    for r in 0..grid_h {
-        grid.put(center.0 + (hh - r as f64) / hh * range_n, 0.0, '│', Style::new(), Layer::Axis, &[Layer::Empty, Layer::Axis]);
-    }
-    grid.put(0.0, 0.0, '┼', Style::new(), Layer::Axis, &[]);
 
     if st.map_trail_enabled && !st.position_trail.is_empty() {
         let cells = grid.braille_points(st.position_trail.iter().map(|&(n, e)| (n, e, 0.0)));
@@ -736,17 +933,59 @@ pub fn draw(ctx: &Ctx) -> Vec<Line<'static>> {
         None if origin.is_some() => grid.marker(0.0, 0.0, 'H', dim),
         None => {}
     }
-    if let Some((x, y)) = target {
-        grid.marker(x, y, '*', Style::new());
+    if view == MapView::Plan {
+        if let Some((x, y)) = target {
+            grid.marker(x, y, '*', Style::new());
+        }
+        if let Some((n, e)) = gps_local {
+            grid.marker(n, e, '⊕', Style::new().fg(CYAN));
+        }
+        grid.marker(lx, ly, heading_arrow(st.yaw), bold(GREEN));
+    } else {
+        // The vehicle up in the air, a stalk down to its shadow on the
+        // ground: the shadow is what lines up with the KML / path / home.
+        let stalk = grid.braille_polyline3(&[[lx, ly, 0.0], [lx, ly, alt]]);
+        grid.paint_braille(stalk, |_| Style::new().fg(GREEN).add_modifier(Modifier::DIM), Layer::Path, &[
+            Layer::Empty,
+            Layer::Axis,
+            Layer::Trail,
+            Layer::Fence,
+        ]);
+        grid.marker3(lx, ly, 0.0, '×', Style::new().fg(GREEN));
+        if let Some((x, y)) = target {
+            let tu = if st.pos_target_z.is_finite() { -st.pos_target_z } else { alt };
+            grid.marker3(x, y, tu, '*', Style::new());
+        }
+        if let Some((n, e)) = gps_local {
+            grid.marker3(n, e, alt, '⊕', Style::new().fg(CYAN));
+        }
+        // Heading arrow as the heading looks on screen.
+        let yaw = st.yaw.to_radians();
+        let reach = range * 0.1;
+        let arrow = match (grid.dot3_f(lx, ly, alt), grid.cam.and_then(|c| c.project([lx + reach * yaw.cos(), ly + reach * yaw.sin(), alt]))) {
+            (Some(a), Some(b)) if st.yaw.is_finite() => heading_arrow((b.0 - a.0).atan2(a.1 - b.1).to_degrees()),
+            _ => heading_arrow(st.yaw),
+        };
+        grid.marker3(lx, ly, alt, arrow, bold(GREEN));
+        if let Some((r, c)) = grid.cell_of3(lx, ly, alt) {
+            grid.label(r, c + 1, &format!(" {alt:.1}m"), Style::new().fg(GREEN), &[Layer::Empty, Layer::Axis, Layer::Trail, Layer::Path]);
+        }
     }
-    if let Some((n, e)) = gps_local {
-        grid.marker(n, e, '⊕', Style::new().fg(CYAN));
-    }
-    grid.marker(lx, ly, heading_arrow(st.yaw), bold(GREEN));
 
-    let mut header = Ln::new()
-        .raw(format!(" range E +/-{range:.1} m  N +/-{range_n:.1} m      "))
-        .dim(format!("cell ~ {:4.1} m x {:4.1} m (to scale)", range / hw, range_n / hh));
+    let mut header = if view == MapView::Plan {
+        Ln::new()
+            .raw(format!(" range E +/-{range:.1} m  N +/-{range_n:.1} m      "))
+            .dim(format!("cell ~ {:4.1} m x {:4.1} m (to scale)", range / hw, range_n / hh))
+    } else {
+        let name = if view == MapView::Chase { "3D chase" } else { "3D" };
+        Ln::new()
+            .fg(format!(" {name}"), GREEN)
+            .raw(format!("  tilt {:.0}°  looking {} ({az:03.0}°)   ±{range:.0} m   ", st.map_tilt, compass_point(az)))
+            .dim({
+                let step = grid_step(range);
+                if step >= 1.0 { format!("grid {step:.0} m") } else { format!("grid {step:.1} m") }
+            })
+    };
     if !st.map_fit_kml && (st.map_follow || st.map_pan != (0.0, 0.0)) {
         let what = if st.map_follow { "[u] follow" } else { "panned" };
         header = header.raw("   ").fg(what, GREEN).raw(format!("  centre N {:+.1} E {:+.1}", center.0, center.1));
@@ -952,6 +1191,59 @@ mod tests {
         let text: String = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
         assert!(text.contains('1') && text.contains('.'));
         assert!(range > 100.0 && range < 1000.0);
+    }
+
+    /// A 20 m square fence around the origin, home at the origin and the
+    /// vehicle 10 m up over its corner, seen tilted from the South.
+    fn tilted_scene(az: f64, tilt: f64) -> Grid {
+        let (w, h) = (61, 21);
+        let mut grid = Grid::new(w, h, (0.0, 0.0), 30.0).with_camera(Camera::new([0.0, 0.0, 0.0], 30.0, az, tilt, w, h));
+        ground_grid(&mut grid, (0.0, 0.0), 30.0);
+        let ring = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0), (-10.0, -10.0)];
+        let cells = grid.braille_polyline(&ring);
+        grid.paint_braille(cells, |_| Style::new().fg(YELLOW), Layer::Fence, &[Layer::Empty, Layer::Axis]);
+        grid.marker(0.0, 0.0, 'H', Style::new());
+        let stalk = grid.braille_polyline3(&[[10.0, 10.0, 0.0], [10.0, 10.0, 10.0]]);
+        grid.paint_braille(stalk, |_| Style::new(), Layer::Path, &[Layer::Empty, Layer::Axis, Layer::Fence]);
+        grid.marker3(10.0, 10.0, 10.0, 'V', Style::new());
+        grid
+    }
+
+    #[test]
+    fn tilted_view_puts_the_near_side_low_and_height_up() {
+        let grid = tilted_scene(0.0, 45.0);
+        // Looking North: the home sits mid-screen, a point South of it is
+        // lower, North higher; the vehicle is above its ground shadow.
+        let (hr, hc) = grid.cell_of(0.0, 0.0).unwrap();
+        assert!((hr as i64 - 10).abs() <= 1 && (hc as i64 - 30).abs() <= 1);
+        assert!(grid.cell_of(-10.0, 0.0).unwrap().0 > hr);
+        assert!(grid.cell_of(10.0, 0.0).unwrap().0 < hr);
+        let (gr, gc) = grid.cell_of(10.0, 10.0).unwrap();
+        let (vr, vc) = grid.cell_of3(10.0, 10.0, 10.0).unwrap();
+        assert!(vr < gr && vc.abs_diff(gc) <= 1);
+        // Perspective: the far edge of the fence is narrower than the near.
+        let width = |n| grid.cell_of(n, 10.0).unwrap().1 - grid.cell_of(n, -10.0).unwrap().1;
+        assert!(width(10.0) < width(-10.0));
+        // Behind the camera is not drawn.
+        assert!(grid.cell_of(-500.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn tilted_view_turns_with_the_azimuth() {
+        // Looking East, North is on the left.
+        let grid = tilted_scene(90.0, 45.0);
+        let (_, hc) = grid.cell_of(0.0, 0.0).unwrap();
+        assert!(grid.cell_of(10.0, 0.0).unwrap().1 < hc);
+    }
+
+    #[test]
+    fn camera_ray_hits_the_ground_where_it_projects() {
+        let cam = Camera::new([5.0, -3.0, 0.0], 30.0, 30.0, 45.0, 61, 21);
+        let (x, y) = cam.project([12.0, 4.0, 0.0]).unwrap();
+        let (n, e, m) = cam.ground_at(x, y).unwrap();
+        assert!((n - 12.0).abs() < 1e-6 && (e - 4.0).abs() < 1e-6 && m > 0.0);
+        // Straight ahead at the horizon and above it there is no ground.
+        assert!(cam.ground_at(61.0, -100.0).is_none());
     }
 
     #[test]

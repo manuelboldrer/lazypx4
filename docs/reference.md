@@ -98,6 +98,7 @@ cross-check. Flight keys work here too.
 | `W` / `C` | Fly KML waypoints (`3`, `seq`, `rand 8`) / lawnmower coverage (`5 90`) |
 | `i` / `I` | Download a satellite snapshot (saved, and drawn under the map grid: full resolution on kitty / Ghostty / WezTerm, half-blocks elsewhere or with `LAZYPX4_GRAPHICS=off`) / hide-show it |
 | arrows, `+`/`-`, `0`, `u`, `f` | Pan, zoom, reset, follow vehicle, fit to KML |
+| `v`, `V`, `<`/`>` | Cycle plan / tilted 3D / 3D chase (behind the vehicle, follows it) view; tilt 30-45-60°; rotate the 3D camera 45°. In 3D the KML fence, waypoints, path, home and trail lie on a ground grid; the vehicle stands on a stalk over its ground shadow `×` |
 
 ### ROS (`w`)
 

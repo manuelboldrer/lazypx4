@@ -7,7 +7,7 @@ use crate::app::{Action, App, GotoTarget, InputKind, Screen, normalize_vim_key};
 use crate::config::*;
 use crate::geo;
 use crate::mav::guided;
-use crate::state::{self, Target, now};
+use crate::state::{self, MapView, Target, now};
 
 /// A jog key as (forward, right, down, yaw sign) unit steps. Yaw is a
 /// compass heading, so "yaw left" decreases it. Shared with the fleet.
@@ -112,11 +112,14 @@ impl App {
         if let "UP" | "DOWN" | "LEFT" | "RIGHT" = key.as_str() {
             let mut st = state::lock(&self.shared);
             let step = st.map_range / 4.0;
+            // Screen-relative: UP moves the view toward where the camera looks.
+            let az = st.map_view.azimuth(st.map_az, st.yaw).to_radians();
+            let (fwd, right) = ((az.cos(), az.sin()), (-az.sin(), az.cos()));
             let (dn, de) = match key.as_str() {
-                "UP" => (step, 0.0),
-                "DOWN" => (-step, 0.0),
-                "LEFT" => (0.0, -step),
-                _ => (0.0, step),
+                "UP" => (step * fwd.0, step * fwd.1),
+                "DOWN" => (-step * fwd.0, -step * fwd.1),
+                "LEFT" => (-step * right.0, -step * right.1),
+                _ => (step * right.0, step * right.1),
             };
             st.map_pan = (st.map_pan.0 + dn, st.map_pan.1 + de);
             st.map_fit_kml = false;
@@ -165,6 +168,37 @@ impl App {
             "u" => {
                 st.map_follow = !st.map_follow;
                 st.map_pan = (0.0, 0.0);
+            }
+            // [v] plan -> tilted 3D -> chase (follows, behind the vehicle).
+            "v" => {
+                st.map_view = match st.map_view {
+                    MapView::Plan => MapView::Tilted,
+                    MapView::Tilted => {
+                        st.map_follow = true;
+                        st.map_fit_kml = false;
+                        st.map_pan = (0.0, 0.0);
+                        MapView::Chase
+                    }
+                    MapView::Chase => MapView::Plan,
+                };
+            }
+            "V" => {
+                st.map_tilt = match st.map_tilt as i64 {
+                    ..=30 => 45.0,
+                    31..=45 => 60.0,
+                    _ => 30.0,
+                };
+                if st.map_view == MapView::Plan {
+                    st.map_view = MapView::Tilted;
+                }
+            }
+            // Rotate the 3D camera; from the chase view this leaves it
+            // where it is, as a tilted view that no longer turns.
+            "<" | "," | ">" | "." => {
+                let az = st.map_view.azimuth(st.map_az, st.yaw);
+                let step = if matches!(key.as_str(), "<" | ",") { -45.0 } else { 45.0 };
+                st.map_az = ((az / 45.0).round() * 45.0 + step).rem_euclid(360.0);
+                st.map_view = MapView::Tilted;
             }
             "I" => st.map_satellite_hidden = !st.map_satellite_hidden,
             "t" => st.map_trail_enabled = !st.map_trail_enabled,
