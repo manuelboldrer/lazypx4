@@ -5,7 +5,7 @@
 //! including messages this build's dialect does not know.
 
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -100,7 +100,7 @@ impl Drop for Recorder {
 
 /// Reads a .tlog back in (recorded) real time, scaled by `speed`.
 pub struct Player {
-    reader: BufReader<File>,
+    reader: mavlink_tlog::TlogReader<File>,
     /// Record read ahead but not yet due.
     pending: Option<(u64, Vec<u8>)>,
     /// (tlog time, wall clock) the schedule is anchored to.
@@ -115,7 +115,7 @@ pub struct Player {
 impl Player {
     pub fn open(path: &str, speed: f64) -> io::Result<Self> {
         Ok(Player {
-            reader: BufReader::new(File::open(path)?),
+            reader: mavlink_tlog::TlogReader::new(File::open(path)?),
             pending: None,
             base: None,
             first_ts: None,
@@ -136,26 +136,10 @@ impl Player {
         self.base = self.first_ts.map(|_| (self.last_ts, Instant::now()));
     }
 
+    /// The next record whose frame passes its CRC check. Damaged bytes are
+    /// skipped and the reader resyncs on the next valid frame.
     fn read_record(&mut self) -> io::Result<Option<(u64, Vec<u8>)>> {
-        let eof_is_end = |r: io::Result<()>| match r {
-            Ok(()) => Ok(true),
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
-            Err(e) => Err(e),
-        };
-        let mut ts = [0u8; 8];
-        let mut head = [0u8; 3];
-        if !eof_is_end(self.reader.read_exact(&mut ts))? || !eof_is_end(self.reader.read_exact(&mut head))? {
-            return Ok(None);
-        }
-        // Not a frame after the timestamp: the file is damaged here. Stop
-        // rather than feed garbage to the decoder.
-        let Some(n) = frame_len(&head) else { return Ok(None) };
-        let mut frame = head.to_vec();
-        frame.resize(n, 0);
-        if !eof_is_end(self.reader.read_exact(&mut frame[3..]))? {
-            return Ok(None);
-        }
-        Ok(Some((u64::from_be_bytes(ts), frame)))
+        Ok(self.reader.next_record()?.map(|r| (r.timestamp_us, r.frame.as_bytes().to_vec())))
     }
 
     /// The frames due now (at most a batch), or how long to wait for the
@@ -215,11 +199,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lazypx4_tlog_test_{}", std::process::id()));
         let mut rec = Recorder::new(dir.to_str().unwrap(), 1);
         // Two v2 frames in one datagram (payload lengths 1 and 2) + junk tail.
-        let datagram = [
-            0xFD, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0xAA, 0x11, 0x22, //
-            0xFD, 2, 0, 0, 1, 1, 1, 0, 0, 0, 0xBB, 0xCC, 0x33, 0x44, //
-            0xFD,
-        ];
+        let mut datagram = [v2(0, &[0xAA]), v2(1, &[0xBB, 0xCC])].concat();
+        datagram.push(0xFD);
         rec.write(&datagram);
         let path = rec.path().to_path_buf();
         drop(rec);
@@ -232,5 +213,37 @@ mod tests {
         }
         assert_eq!(frames, vec![datagram[..13].to_vec(), datagram[13..27].to_vec()]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn v2(seq: u8, payload: &[u8]) -> Vec<u8> {
+        let mut out = [0u8; 280];
+        let header = mavlink_tlog::Header { seq, sys_id: 1, comp_id: 1, msg_id: 0 };
+        let n = mavlink_tlog::frame::encode(mavlink_tlog::frame::Version::V2, header, payload, None, &mut out).unwrap();
+        out[..n].to_vec()
+    }
+
+    #[test]
+    fn skips_damaged_records_and_keeps_replaying() {
+        let good = [v2(0, &[0xAA]), v2(1, &[0xBB]), v2(2, &[0xCC])];
+        let mut bad_crc = v2(3, &[0xDD]);
+        *bad_crc.last_mut().unwrap() ^= 0xFF;
+        let mut file = Vec::new();
+        for (i, f) in [&good[0], &bad_crc, &vec![0x00, 0x13, 0x37], &good[1], &good[2]].iter().enumerate() {
+            file.extend_from_slice(&(1_700_000_000_000_000u64 + i as u64).to_be_bytes());
+            file.extend_from_slice(f);
+        }
+        let path = std::env::temp_dir().join(format!("lazypx4_tlog_damaged_{}.tlog", std::process::id()));
+        std::fs::write(&path, &file).unwrap();
+        let mut p = Player::open(path.to_str().unwrap(), 1000.0).unwrap();
+        let mut frames = Vec::new();
+        while !p.done {
+            if let Ok(batch) = p.due().unwrap() {
+                frames.extend(batch);
+            }
+        }
+        // The corrupted frame is not replayed, and the junk record does not
+        // end playback.
+        assert_eq!(frames, good.to_vec());
+        let _ = std::fs::remove_file(path);
     }
 }
